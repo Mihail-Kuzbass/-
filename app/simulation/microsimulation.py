@@ -175,7 +175,12 @@ def simulate_micro(movements, phases, duration_seconds=1800, profiles=None,
         t = step * time_step_s
         # Generate arrivals at the requested hourly intensity.
         for movement in movements:
-            if rng.random() < movement.vehicles_per_hour * time_step_s / 3600.0:
+            expected_arrivals = movement.vehicles_per_hour * time_step_s / 3600.0
+            # Support high-volume approaches even when more than one vehicle arrives per step.
+            count = int(expected_arrivals)
+            if rng.random() < expected_arrivals - count:
+                count += 1
+            for _ in range(count):
                 profile = choose_profile()
                 vehicle = Vehicle(next_id, movement.movement_id, profile,
                                   approach_length_m, 0.0)
@@ -284,7 +289,7 @@ def simulate_micro(movements, phases, duration_seconds=1800, profiles=None,
         elapsed += time_step_s
 
     return MicroSimulationResult(
-        duration_seconds=int(elapsed), arrivals=arrivals, departed=departed,
+        duration_seconds=round(elapsed), arrivals=arrivals, departed=departed,
         final_queue=sum(len(q) for q in queues.values()), max_queue=max_queue,
         average_speed_kmh=(sum(speed_samples) / len(speed_samples)) if speed_samples else 0.0,
         average_delay_s=(sum(delay_samples) / len(delay_samples)) if delay_samples else 0.0,
