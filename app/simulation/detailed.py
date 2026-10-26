@@ -5,6 +5,7 @@ and only movements explicitly assigned to a phase receive green.
 """
 from dataclasses import dataclass
 import random
+from app.signs import movement_allowed_by_signs
 
 
 @dataclass(frozen=True)
@@ -160,7 +161,7 @@ class DetailedResult:
 
 
 def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
-                      saturation_vph=1800, seed=42):
+                      saturation_vph=1800, seed=42, signs=None):
     if duration_seconds < 1 or saturation_vph < 1:
         raise ValueError("Длительность и насыщенная интенсивность должны быть положительными.")
     if not movements and not pedestrians:
@@ -192,6 +193,16 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
                 assigned.update(key for key in all_ids if key.startswith(prefix))
             else:
                 assigned.add(token)
+        # Apply prohibitory and mandatory signs attached to each approach.
+        movement_map_for_signs = {m.movement_id: m for m in movements}
+        assigned = {
+            key for key in assigned
+            if key not in movement_map_for_signs or movement_allowed_by_signs(
+                movement_map_for_signs[key].approach,
+                movement_map_for_signs[key].turn,
+                signs or [],
+            )
+        }
         conflicts = find_phase_conflicts(assigned, movements, pedestrians)
         if conflicts:
             phase_conflicts.append((phase.name, conflicts))
