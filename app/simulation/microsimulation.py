@@ -235,7 +235,7 @@ def simulate_micro(movements, phases, duration_seconds=1800, profiles=None,
             for index, vehicle in enumerate(queue):
                 target = min(vehicle.profile.desired_speed_kmh, movement.speed_limit_kmh) / 3.6
                 gap = (vehicle.distance_to_stop_m if index == 0
-                       else queue[index - 1].distance_to_stop_m - vehicle.distance_to_stop_m
+                       else vehicle.distance_to_stop_m - queue[index - 1].distance_to_stop_m
                        - queue[index - 1].profile.length_m)
                 if index > 0:
                     leader = queue[index - 1]
