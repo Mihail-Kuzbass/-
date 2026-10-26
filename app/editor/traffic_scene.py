@@ -43,6 +43,9 @@ class TrafficScene(QWidget):
         self.spawn_clock = {}
         self.ped_spawn_clock = {}
         self._geometry = None
+        self.playback_events = []
+        self.event_cursor = 0
+        self.replay_mode = False
         self.timer = QTimer(self)
         self.timer.setInterval(50)
         self.timer.timeout.connect(self._advance)
@@ -51,7 +54,7 @@ class TrafficScene(QWidget):
         self.speed_multiplier = 2 if int(multiplier) >= 2 else 1
         self.update()
 
-    def configure(self, phases, movements, pedestrians, cycle_seconds, lane_counts=None, lane_turns=None):
+    def configure(self, phases, movements, pedestrians, cycle_seconds, lane_counts=None, lane_turns=None, result=None):
         self.pause()
         self.phases = list(phases)
         self.movements = list(movements)
@@ -67,6 +70,9 @@ class TrafficScene(QWidget):
         self.walkers.clear()
         self.spawn_clock.clear()
         self.ped_spawn_clock.clear()
+        self.playback_events = sorted((getattr(result, "events", None) or []), key=lambda e: (e["time"], 0 if e["kind"].endswith("arrival") else 1))
+        self.event_cursor = 0
+        self.replay_mode = bool(self.playback_events)
         self.update()
 
     def start(self):
@@ -92,23 +98,67 @@ class TrafficScene(QWidget):
         self.update()
 
     def _advance(self):
-        dt = 0.05 * self.speed_multiplier
+        # Replay the exact arrivals/service events used by the report. 10x playback
+        # keeps a long scenario reviewable; the UI toggle changes it to 20x.
+        dt = 0.5 * self.speed_multiplier
         self.sim_time += dt
         self.phase_elapsed += dt
         if self.phases:
-            duration = max(1, self.phases[self.phase_index].duration_seconds)
-            if self.phase_elapsed >= duration:
-                self.phase_elapsed -= duration
+            while self.phase_elapsed >= max(1, self.phases[self.phase_index].duration_seconds):
+                self.phase_elapsed -= max(1, self.phases[self.phase_index].duration_seconds)
                 self.phase_index = (self.phase_index + 1) % len(self.phases)
+        if self.replay_mode:
+            self._consume_replay_events()
+        else:
+            stage, active = self._stage(), self._active_ids()
+            self._spawn_eligible(stage, active, dt)
         stage, active = self._stage(), self._active_ids()
-        self._spawn_eligible(stage, active, dt)
         for vehicle in self.vehicles:
-            vehicle["distance"] += vehicle["speed"] * dt
+            # Cars approach even on red, stop at the stop line, and only enter
+            # when the matching movement has a service/release event.
+            proposed = vehicle["distance"] + vehicle["speed"] * dt
+            if vehicle["distance"] < vehicle["stop_distance"]:
+                vehicle["distance"] = min(proposed, vehicle["stop_distance"])
+            elif vehicle.get("released", False):
+                vehicle["distance"] = proposed
+            else:
+                vehicle["distance"] = vehicle["stop_distance"]
         self.vehicles = [v for v in self.vehicles if v["distance"] < v["length"]]
         for walker in self.walkers:
-            walker["distance"] += walker["speed"] * dt
+            if walker.get("released", True):
+                walker["distance"] += walker["speed"] * dt
         self.walkers = [v for v in self.walkers if v["distance"] < v["length"]]
         self.update()
+
+    def _consume_replay_events(self):
+        while self.event_cursor < len(self.playback_events) and self.playback_events[self.event_cursor]["time"] <= self.sim_time:
+            event = self.playback_events[self.event_cursor]
+            key = event["movement_id"]
+            if event["kind"] == "vehicle_arrival":
+                demand = next((m for m in self.movements if m.movement_id == key), None)
+                if demand is not None:
+                    path, stop_distance = self._vehicle_path(demand.approach, demand.lane, demand.turn)
+                    self.vehicles.append({"key": key, "path": path, "distance": 0.0,
+                                          "length": path.length(), "stop_distance": stop_distance,
+                                          "speed": 46.0, "turn": demand.turn, "released": False})
+            elif event["kind"] == "vehicle_served":
+                vehicle = next((v for v in self.vehicles if v["key"] == key and not v.get("released", False)
+                                and v["distance"] >= v["stop_distance"] - 1.0), None)
+                if vehicle is None:
+                    vehicle = next((v for v in self.vehicles if v["key"] == key and not v.get("released", False)), None)
+                if vehicle is not None:
+                    vehicle["released"] = True
+            elif event["kind"] == "pedestrian_arrival":
+                demand = next((p for p in self.pedestrians if p.movement_id == key), None)
+                if demand is not None:
+                    path = self._pedestrian_path(demand.crossing)
+                    self.walkers.append({"key": key, "path": path, "distance": 0.0,
+                                         "length": path.length(), "speed": 48.0, "released": False})
+            elif event["kind"] == "pedestrian_served":
+                walker = next((v for v in self.walkers if v["key"] == key and not v.get("released", False)), None)
+                if walker is not None:
+                    walker["released"] = True
+            self.event_cursor += 1
 
     def _stage(self):
         if not self.phases:
@@ -166,11 +216,12 @@ class TrafficScene(QWidget):
                 self.spawn_clock[key] = self.spawn_clock.get(key, 0.0) + dt
                 interval = max(1.25, 3600.0 / rate)
                 if self.spawn_clock[key] >= interval and not any(v["key"] == key and v["distance"] < 42 for v in self.vehicles):
-                    path = self._vehicle_path(demand.approach, demand.lane, demand.turn)
+                    path, stop_distance = self._vehicle_path(demand.approach, demand.lane, demand.turn)
                     length = path.length()
                     if length > 0:
                         self.vehicles.append({"key": key, "path": path, "distance": 0.0,
-                                              "length": length, "speed": 92.0, "turn": demand.turn})
+                                              "length": length, "stop_distance": stop_distance,
+                                              "speed": 46.0, "turn": demand.turn, "released": False})
                         self.spawn_clock[key] = 0.0
         for pedestrian in self.pedestrians:
             key = pedestrian.movement_id
@@ -215,46 +266,48 @@ class TrafficScene(QWidget):
         center = self._lane_center(approach, lane, g)
         cx, cy, left, right, top, bottom = (g[k] for k in ("cx", "cy", "left", "right", "top", "bottom"))
         exit_margin = 95.0
-        stop_offset = 52.0
+        approach_margin = 115.0
+        stop_offset = 34.0
         if approach == "Север":
-            start = QPointF(center.x(), top - stop_offset); entry = QPointF(center.x(), top)
+            start = QPointF(center.x(), top - approach_margin)
+            stop = QPointF(center.x(), top - stop_offset)
+            entry = QPointF(center.x(), top)
             exit_side = {"Прямо": "Юг", "Налево": "Восток", "Направо": "Запад"}[turn]
         elif approach == "Юг":
-            start = QPointF(center.x(), bottom + stop_offset); entry = QPointF(center.x(), bottom)
+            start = QPointF(center.x(), bottom + approach_margin)
+            stop = QPointF(center.x(), bottom + stop_offset)
+            entry = QPointF(center.x(), bottom)
             exit_side = {"Прямо": "Север", "Налево": "Запад", "Направо": "Восток"}[turn]
         elif approach == "Запад":
-            start = QPointF(left - stop_offset, center.y()); entry = QPointF(left, center.y())
+            start = QPointF(left - approach_margin, center.y())
+            stop = QPointF(left - stop_offset, center.y())
+            entry = QPointF(left, center.y())
             exit_side = {"Прямо": "Восток", "Налево": "Север", "Направо": "Юг"}[turn]
         else:
-            start = QPointF(right + stop_offset, center.y()); entry = QPointF(right, center.y())
+            start = QPointF(right + approach_margin, center.y())
+            stop = QPointF(right + stop_offset, center.y())
+            entry = QPointF(right, center.y())
             exit_side = {"Прямо": "Запад", "Налево": "Юг", "Направо": "Север"}[turn]
         exit_pos = (lane - 0.5) / max(1, self.lane_counts.get(approach, 1))
         if exit_side == "Юг":
-            ex = cx + exit_pos * g["road"] / 2
-            end = QPointF(ex, g["h"] + exit_margin)
+            end = QPointF(cx + exit_pos * g["road"] / 2, g["h"] + exit_margin)
         elif exit_side == "Север":
-            ex = left + exit_pos * g["road"] / 2
-            end = QPointF(ex, -exit_margin)
+            end = QPointF(left + exit_pos * g["road"] / 2, -exit_margin)
         elif exit_side == "Восток":
-            ey = top + exit_pos * g["road"] / 2
-            end = QPointF(g["w"] + exit_margin, ey)
+            end = QPointF(g["w"] + exit_margin, top + exit_pos * g["road"] / 2)
         else:
-            ey = cy + exit_pos * g["road"] / 2
-            end = QPointF(-exit_margin, ey)
+            end = QPointF(-exit_margin, cy + exit_pos * g["road"] / 2)
         path = QPainterPath(start)
+        path.lineTo(stop)
+        stop_distance = hypot(stop.x() - start.x(), stop.y() - start.y())
+        path.lineTo(entry)
         if approach == exit_side:
             path.lineTo(end)
-            return path
-        if approach in ("Север", "Юг"):
-            c1 = QPointF(entry.x(), cy)
-        else:
-            c1 = QPointF(cx, entry.y())
-        if exit_side in ("Север", "Юг"):
-            c2 = QPointF(end.x(), cy)
-        else:
-            c2 = QPointF(cx, end.y())
+            return path, stop_distance
+        c1 = QPointF(entry.x(), cy) if approach in ("Север", "Юг") else QPointF(cx, entry.y())
+        c2 = QPointF(end.x(), cy) if exit_side in ("Север", "Юг") else QPointF(cx, end.y())
         path.cubicTo(c1, c2, end)
-        return path
+        return path, stop_distance
 
     def _pedestrian_path(self, crossing):
         g = self._layout()
@@ -282,7 +335,9 @@ class TrafficScene(QWidget):
     def _point_at(self, item):
         path = item["path"]
         length = max(1.0, item["length"])
-        return path.pointAtPercent(min(1.0, item["distance"] / length))
+        # QPainterPath percentage is a curve parameter, not a distance ratio.
+        percent = path.percentAtLength(min(length, max(0.0, item["distance"])))
+        return path.pointAtPercent(percent)
 
     @staticmethod
     def _draw_arrow(p, x, y, glyph, color=QColor("#f8fafc")):
@@ -413,7 +468,6 @@ class TrafficScene(QWidget):
         # Animate vehicles along complete Bézier paths, including the exit beyond the far curb.
         for vehicle in self.vehicles:
             pt = self._point_at(vehicle)
-            tangent = vehicle["path"].pointAtPercent(min(1.0, vehicle["distance"] / max(1.0, vehicle["length"])))
             p.save()
             p.translate(pt)
             p.setPen(QPen(QColor("#082f49"), 1))
