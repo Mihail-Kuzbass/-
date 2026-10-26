@@ -200,35 +200,47 @@ class TrafficScene(QWidget):
     def _lane_center(self, approach, lane, g):
         count = max(1, self.lane_counts.get(approach, 1))
         pos = (lane - 0.5) / count
-        if approach in ("Север", "Юг"):
-            return QPointF(g["left"] + pos * g["road"], g["top"] if approach == "Север" else g["bottom"])
-        return QPointF(g["left"] if approach == "Запад" else g["right"],
-                       g["top"] + pos * g["road"])
+        # Each approach occupies its own half of the carriageway so opposing
+        # directions never share a lane center.
+        if approach == "Север":
+            return QPointF(g["cx"] + pos * g["road"] / 2, g["top"])
+        if approach == "Юг":
+            return QPointF(g["left"] + pos * g["road"] / 2, g["bottom"])
+        if approach == "Запад":
+            return QPointF(g["left"], g["top"] + pos * g["road"] / 2)
+        return QPointF(g["right"], g["cy"] + pos * g["road"] / 2)
 
     def _vehicle_path(self, approach, lane, turn):
         g = self._layout()
         center = self._lane_center(approach, lane, g)
         cx, cy, left, right, top, bottom = (g[k] for k in ("cx", "cy", "left", "right", "top", "bottom"))
-        margin = 95.0
+        exit_margin = 95.0
+        stop_offset = 38.0
         if approach == "Север":
-            start = QPointF(center.x(), -margin); entry = QPointF(center.x(), top)
+            start = QPointF(center.x(), top - stop_offset); entry = QPointF(center.x(), top)
             exit_side = {"Прямо": "Юг", "Налево": "Восток", "Направо": "Запад"}[turn]
         elif approach == "Юг":
-            start = QPointF(center.x(), g["h"] + margin); entry = QPointF(center.x(), bottom)
+            start = QPointF(center.x(), bottom + stop_offset); entry = QPointF(center.x(), bottom)
             exit_side = {"Прямо": "Север", "Налево": "Запад", "Направо": "Восток"}[turn]
         elif approach == "Запад":
-            start = QPointF(-margin, center.y()); entry = QPointF(left, center.y())
+            start = QPointF(left - stop_offset, center.y()); entry = QPointF(left, center.y())
             exit_side = {"Прямо": "Восток", "Налево": "Север", "Направо": "Юг"}[turn]
         else:
-            start = QPointF(g["w"] + margin, center.y()); entry = QPointF(right, center.y())
+            start = QPointF(right + stop_offset, center.y()); entry = QPointF(right, center.y())
             exit_side = {"Прямо": "Запад", "Налево": "Юг", "Направо": "Север"}[turn]
         exit_pos = (lane - 0.5) / max(1, self.lane_counts.get(approach, 1))
-        if exit_side in ("Север", "Юг"):
-            ex = left + exit_pos * g["road"]
-            end = QPointF(ex, -margin if exit_side == "Север" else g["h"] + margin)
+        if exit_side == "Юг":
+            ex = cx + exit_pos * g["road"] / 2
+            end = QPointF(ex, g["h"] + exit_margin)
+        elif exit_side == "Север":
+            ex = left + exit_pos * g["road"] / 2
+            end = QPointF(ex, -exit_margin)
+        elif exit_side == "Восток":
+            ey = top + exit_pos * g["road"] / 2
+            end = QPointF(g["w"] + exit_margin, ey)
         else:
-            ey = top + exit_pos * g["road"]
-            end = QPointF(-margin if exit_side == "Запад" else g["w"] + margin, ey)
+            ey = cy + exit_pos * g["road"] / 2
+            end = QPointF(-exit_margin, ey)
         path = QPainterPath(start)
         if approach == exit_side:
             path.lineTo(end)
@@ -327,7 +339,7 @@ class TrafficScene(QWidget):
         for approach in ("Север", "Юг"):
             count = max(1, self.lane_counts.get(approach, 1))
             for i in range(1, count):
-                x = left + road * i / count
+                x = (cx + road * i / (2 * count)) if approach == "Север" else (left + road * i / (2 * count))
                 if approach == "Север":
                     p.drawLine(int(x), 42, int(x), int(top))
                 else:
@@ -335,11 +347,17 @@ class TrafficScene(QWidget):
         for approach in ("Запад", "Восток"):
             count = max(1, self.lane_counts.get(approach, 1))
             for i in range(1, count):
-                y = top + road * i / count
+                y = (top + road * i / (2 * count)) if approach == "Запад" else (cy + road * i / (2 * count))
                 if approach == "Запад":
                     p.drawLine(0, int(y), int(left), int(y))
                 else:
                     p.drawLine(int(right), int(y), int(w), int(y))
+        # Center lines separate opposing directions.
+        p.setPen(QPen(QColor("#e2e8f0"), 1, Qt.PenStyle.DashLine))
+        p.drawLine(int(cx), 42, int(cx), int(top))
+        p.drawLine(int(cx), int(bottom), int(cx), int(h - 42))
+        p.drawLine(0, int(cy), int(left), int(cy))
+        p.drawLine(int(right), int(cy), int(w), int(cy))
         # Crosswalks with zebra stripes and stop lines.
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor("#f8fafc"))
