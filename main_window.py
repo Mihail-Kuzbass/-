@@ -58,11 +58,33 @@ class MainWindow(QMainWindow):
         self.api_key = QLineEdit(self.settings.get("dgis_api_key", ""))
         self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.query = QLineEdit("перекрёсток")
+        self.city_presets = {
+            "Москва": (55.751244, 37.618423),
+            "Санкт-Петербург": (59.938630, 30.314130),
+            "Новосибирск": (55.008353, 82.935733),
+            "Кемерово": (55.354968, 86.087314),
+            "Новокузнецк": (53.759635, 87.121570),
+            "Красноярск": (56.015283, 92.893247),
+            "Барнаул": (53.347997, 83.779806),
+            "Томск": (56.484645, 84.947649),
+            "Омск": (54.989342, 73.368212),
+            "Екатеринбург": (56.838011, 60.597465),
+            "Казань": (55.796127, 49.106405),
+            "Нижний Новгород": (56.296504, 43.936059),
+            "Самара": (53.195878, 50.100202),
+            "Владивосток": (43.115536, 131.885485),
+            "Другой город / координаты вручную": None,
+        }
+        self.city_combo = QComboBox()
+        self.city_combo.addItems(self.city_presets.keys())
+        self.city_combo.currentTextChanged.connect(self._apply_city_preset)
         self.lat = QDoubleSpinBox(); self.lat.setRange(-90,90); self.lat.setDecimals(6); self.lat.setValue(55.751244)
         self.lon = QDoubleSpinBox(); self.lon.setRange(-180,180); self.lon.setDecimals(6); self.lon.setValue(37.618423)
         self.radius = QSpinBox(); self.radius.setRange(100,50000); self.radius.setValue(1500); self.radius.setSuffix(" м")
         f.addRow("API-ключ", self.api_key); f.addRow("Поисковый запрос", self.query)
+        f.addRow("Город для карты OSM", self.city_combo)
         f.addRow("Широта", self.lat); f.addRow("Долгота", self.lon); f.addRow("Радиус", self.radius)
+        self._apply_city_preset(self.city_combo.currentText())
         l.addWidget(formbox)
         buttons = QHBoxLayout()
         save = QPushButton("Сохранить ключ локально"); save.clicked.connect(self._save_key); buttons.addWidget(save)
@@ -70,7 +92,7 @@ class MainWindow(QMainWindow):
         l.addLayout(buttons)
         road_box = QGroupBox("Дорожная геометрия OpenStreetMap")
         road_layout = QVBoxLayout(road_box)
-        road_note = QLabel("Загружает линии дорог OpenStreetMap через Overpass API и показывает их на предпросмотре. Это геометрия дорог, а не готовая модель полос/фаз; геометрию перекрёстка и сигналы нужно проверить вручную.")
+        road_note = QLabel("Выберите город из списка или задайте координаты вручную. Загружаются дороги только вокруг указанной точки; повторные запросы используют локальный кэш. Это геометрия дорог, а не готовая модель полос/фаз; перекрёсток и сигналы нужно проверить вручную.")
         road_note.setWordWrap(True); road_layout.addWidget(road_note)
         road_buttons = QHBoxLayout()
         osm = QPushButton("Импортировать дороги OSM вокруг точки"); osm.clicked.connect(self._import_osm_roads); road_buttons.addWidget(osm)
@@ -85,10 +107,18 @@ class MainWindow(QMainWindow):
         l.addWidget(self.dgis_results, 1)
         return w
 
+    def _apply_city_preset(self, city_name):
+        coords = self.city_presets.get(city_name)
+        if coords is None:
+            return
+        lat, lon = coords
+        self.lat.setValue(lat)
+        self.lon.setValue(lon)
+
     def _import_osm_roads(self):
         from math import cos, radians
         lat, lon = self.lat.value(), self.lon.value()
-        radius_km = min(self.radius.value() / 1000.0, 2.0)
+        radius_km = min(self.radius.value() / 1000.0, 5.0)
         dlat = radius_km / 111.0
         dlon = radius_km / max(20.0, 111.0 * abs(cos(radians(lat))))
         self.dgis_results.setPlainText("Запрашиваются дорожные линии из OpenStreetMap/Overpass…")
