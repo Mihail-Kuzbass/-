@@ -117,28 +117,53 @@ class MainWindow(QMainWindow):
 
     def _import_osm_roads(self):
         from math import cos, radians
+        from PySide6.QtCore import QThread, Signal
+
         lat, lon = self.lat.value(), self.lon.value()
         radius_km = min(self.radius.value() / 1000.0, 5.0)
         dlat = radius_km / 111.0
         dlon = radius_km / max(20.0, 111.0 * abs(cos(radians(lat))))
-        self.dgis_results.setPlainText("Запрашиваются дорожные линии из OpenStreetMap/Overpass…")
-        try:
-            self.road_network = fetch_osm_roads(lat-dlat, lon-dlon, lat+dlat, lon+dlon)
-            self.osm_preview.set_data(self.road_network)
-            features = self.road_network.get("features", [])
-            highways = {}
-            for feature in features:
-                kind = feature.get("properties", {}).get("highway", "unknown")
-                highways[kind] = highways.get(kind, 0) + 1
-            summary = "\n".join(f"  {k}: {v}" for k, v in sorted(highways.items()))
-            report = (f"Импортировано линейных объектов: {len(features)}\n"
-                      f"Источник: OpenStreetMap через Overpass API\n\nТипы highway:\n{summary}\n\n"
-                      "Ограничение: это линии дорог, не полосы движения, не направления разрешённых поворотов "
-                      "и не контроллер светофора. Для моделирования потребуется очистка/конвертация и проверка геометрии.")
-            self.dgis_results.setPlainText(report)
-        except RoadNetworkError as exc:
-            QMessageBox.warning(self, "Ошибка импорта дорожной сети", str(exc))
-            self.dgis_results.setPlainText(str(exc))
+        bounds = (lat-dlat, lon-dlon, lat+dlat, lon+dlon)
+        self.dgis_results.setPlainText(
+            "Загружаются дороги выбранного участка OpenStreetMap… Окно программы останется доступным."
+        )
+
+        class OSMWorker(QThread):
+            completed = Signal(object, object)
+
+            def run(worker_self):
+                try:
+                    data = fetch_osm_roads(*bounds)
+                    worker_self.completed.emit(data, None)
+                except Exception as exc:
+                    worker_self.completed.emit(None, str(exc))
+
+        self.osm_worker = OSMWorker(self)
+        self.osm_worker.completed.connect(self._finish_osm_import)
+        self.osm_worker.start()
+
+    def _finish_osm_import(self, data, error):
+        if error:
+            QMessageBox.warning(self, "Ошибка импорта дорожной сети", error)
+            self.dgis_results.setPlainText(error)
+            return
+
+        self.road_network = data
+        self.osm_preview.set_data(self.road_network)
+        features = self.road_network.get("features", [])
+        highways = {}
+        for feature in features:
+            kind = feature.get("properties", {}).get("highway", "unknown")
+            highways[kind] = highways.get(kind, 0) + 1
+        summary = "\n".join(f"  {kind}: {count}" for kind, count in sorted(highways.items()))
+        cache_status = "локальный кэш" if data.get("cache_status") == "hit" else "загрузка из Overpass API"
+        report = (f"Импортировано линейных объектов: {len(features)}\n"
+                  f"Источник: OpenStreetMap ({cache_status})\n"
+                  f"Сохранение кэша: {__import__('pathlib').Path.home() / '.traffic_signal_studio' / 'osm_cache'}\n\n"
+                  f"Типы highway:\n{summary}\n\n"
+                  "Ограничение: это линии дорог, не полосы движения, не направления разрешённых поворотов "
+                  "и не контроллер светофора. Для моделирования потребуется очистка/конвертация и проверка геометрии.")
+        self.dgis_results.setPlainText(report)
 
     def _open_geojson(self):
         path, _ = QFileDialog.getOpenFileName(self, "Открыть дорожную сеть GeoJSON", "", "GeoJSON (*.geojson *.json)")
