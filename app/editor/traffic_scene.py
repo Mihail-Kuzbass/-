@@ -452,6 +452,71 @@ class TrafficScene(QWidget):
             p.drawEllipse(int(lx - 4), int(ly - 4), 8, 8)
         p.restore()
 
+    @staticmethod
+    def _draw_road_sign(p, x, y, code):
+        """Paint a compact but recognizable Russian road-sign face with vector geometry."""
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        center = QPointF(x, y)
+        red = QColor("#d71920")
+        blue = QColor("#0759a6")
+        white = QColor("#ffffff")
+        black = QColor("#15191f")
+        p.setPen(QPen(QColor("#27313b"), 1))
+        p.setBrush(white)
+
+        def polygon(points, fill, outline=black, width=1.5):
+            p.setPen(QPen(outline, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            p.setBrush(fill)
+            p.drawPolygon([QPointF(x + px, y + py) for px, py in points])
+
+        def arrow(glyph, color=white, size=21):
+            p.setPen(color)
+            p.setFont(QFont("DejaVu Sans", size, QFont.Weight.Bold))
+            p.drawText(int(x - 15), int(y - 10), 30, 23, Qt.AlignmentFlag.AlignCenter, glyph)
+
+        if code == "2.1":
+            polygon([(0,-19),(19,0),(0,19),(-19,0)], QColor("#f4cc21"), white, 3)
+            polygon([(0,-15),(15,0),(0,15),(-15,0)], QColor("#f4cc21"), QColor("#b28a00"), 1)
+        elif code == "2.4":
+            polygon([(-22,-15),(22,-15),(0,22)], white, red, 5)
+        elif code == "2.5":
+            import math
+            polygon([(19*math.cos(math.radians(22.5+i*45)),19*math.sin(math.radians(22.5+i*45))) for i in range(8)], red, white, 2)
+            p.setPen(white); p.setFont(QFont("Arial", 8, QFont.Weight.Bold))
+            p.drawText(int(x-15), int(y-5), 30, 12, Qt.AlignmentFlag.AlignCenter, "STOP")
+        elif code in ("2.6", "2.7"):
+            polygon([(-21,-17),(21,-17),(21,17),(-21,17)], white if code=="2.6" else blue, white, 1)
+            p.setPen(QPen(red if code=="2.6" else white, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.drawLine(int(x-8),int(y+11),int(x-8),int(y-11))
+            p.drawLine(int(x-8),int(y-11),int(x-13),int(y-5))
+            p.drawLine(int(x-8),int(y-11),int(x-3),int(y-5))
+            p.setPen(QPen(blue if code=="2.6" else white, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.drawLine(int(x+8),int(y-11),int(x+8),int(y+11))
+            p.drawLine(int(x+8),int(y+11),int(x+3),int(y+5))
+            p.drawLine(int(x+8),int(y+11),int(x+13),int(y+5))
+        elif code == "3.1":
+            p.setPen(Qt.PenStyle.NoPen); p.setBrush(red); p.drawEllipse(center, 20, 20)
+            p.setBrush(white); p.drawRoundedRect(int(x-14),int(y-5),28,10,2,2)
+        elif code in ("3.2","3.18.1","3.18.2","3.19"):
+            p.setPen(QPen(red, 5)); p.setBrush(white); p.drawEllipse(center, 19, 19)
+            if code == "3.2":
+                p.setPen(QPen(red, 5)); p.drawLine(int(x-12),int(y+12),int(x+12),int(y-12))
+            else:
+                glyph = {"3.18.1":"→","3.18.2":"←","3.19":"↶"}[code]
+                p.setPen(black); p.setFont(QFont("DejaVu Sans", 22, QFont.Weight.Bold))
+                p.drawText(int(x-16),int(y-14),32,28,Qt.AlignmentFlag.AlignCenter,glyph)
+                p.setPen(QPen(red, 4)); p.drawLine(int(x-14),int(y+14),int(x+14),int(y-14))
+        elif code.startswith("4.1."):
+            p.setPen(QPen(white, 1)); p.setBrush(blue); p.drawEllipse(center, 20, 20)
+            glyph = {"4.1.1":"↑","4.1.2":"→","4.1.3":"←","4.1.4":"↗","4.1.5":"↖","4.1.6":"↔"}.get(code,"↑")
+            arrow(glyph, white, 22)
+        else:
+            p.setPen(QPen(red, 4)); p.setBrush(white); p.drawEllipse(center, 19, 19)
+            p.setPen(black); p.setFont(QFont("Arial", 8, QFont.Weight.Bold))
+            p.drawText(int(x-15),int(y-5),30,10,Qt.AlignmentFlag.AlignCenter,code)
+        p.restore()
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -552,41 +617,25 @@ class TrafficScene(QWidget):
                     self._draw_signal_head(p, left - 12, pos.y(), state, horizontal=True)
                 else:
                     self._draw_signal_head(p, right + 12, pos.y(), state, horizontal=True)
-        # Draw placed signs on their approach (schematic symbols with sign number).
+        # Draw road signs as recognizable, full-size vector pictograms (not code-only icons).
         for sign in self.road_signs:
             approach, code = sign.get("approach"), sign.get("code", "")
             if approach == "Север":
-                sx, sy = cx + road * 0.29, top - 53
+                sx, sy = cx + road * 0.31, top - 58
             elif approach == "Юг":
-                sx, sy = cx + road * 0.29, bottom + 54
+                sx, sy = cx + road * 0.31, bottom + 59
             elif approach == "Запад":
-                sx, sy = left - 55, cy - road * 0.29
+                sx, sy = left - 59, cy - road * 0.31
             else:
-                sx, sy = right + 55, cy - road * 0.29
-            group = SIGN_CATALOG.get(code, ("Знак", "other"))[1]
-            p.setPen(QPen(QColor("#334155"), 1))
-            if group == "priority" and code == "2.1":
-                p.setBrush(QColor("#facc15"))
-                p.drawPolygon([QPointF(sx, sy-10), QPointF(sx+10, sy),
-                               QPointF(sx, sy+10), QPointF(sx-10, sy)])
-            elif group == "priority" and code in ("2.4", "2.5"):
-                p.setBrush(QColor("#ffffff"))
-                p.drawPolygon([QPointF(sx-10, sy-7), QPointF(sx+10, sy-7),
-                               QPointF(sx, sy+10)])
-            elif group == "prohibitory":
-                p.setBrush(QColor("#ffffff"))
-                p.drawEllipse(QPointF(sx, sy), 10, 10)
-                p.setPen(QPen(QColor("#dc2626"), 3))
-                p.drawEllipse(QPointF(sx, sy), 10, 10)
-            else:
-                p.setBrush(QColor("#2563eb"))
-                p.drawEllipse(QPointF(sx, sy), 10, 10)
-            p.setPen(QColor("#111827") if group != "mandatory" else QColor("#ffffff"))
-            p.setFont(QFont("Segoe UI", 6, QFont.Weight.Bold))
-            p.drawText(int(sx-10), int(sy+3), code)
+                sx, sy = right + 59, cy - road * 0.31
+            self._draw_road_sign(p, sx, sy, code)
+            p.save()
             p.setPen(QColor("#0f172a"))
-            p.setFont(QFont("Segoe UI", 7))
-            p.drawText(int(sx-42), int(sy+22), code + " " + sign.get("name", ""))
+            p.setFont(QFont("Segoe UI", 7, QFont.Weight.DemiBold))
+            label = f"{code} · {sign.get('name', SIGN_CATALOG.get(code, ('Знак', ''))[0])}"
+            p.drawText(int(sx - 68), int(sy + 31), 136, 22,
+                       Qt.AlignmentFlag.AlignHCenter | Qt.TextFlag.TextWordWrap, label)
+            p.restore()
 
         # Distinct top-down vehicle silhouettes; sizes are schematic, not to scale.
         for vehicle in self.vehicles:
