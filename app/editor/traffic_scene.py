@@ -93,7 +93,14 @@ class TrafficScene(QWidget):
             p.drawRect(int(cx-rw/2-12), int(cy+offset), 8, int(rw/12))
             p.drawRect(int(cx+rw/2+4), int(cy+offset), 8, int(rw/12))
         # Signal status is based on actual movement assignments in the current phase.
-        active = set(self.phases[self.phase_index].movements) if self.phases else set()
+        active = set()
+        if self.phases:
+            all_ids = [m.movement_id for m in self.movements] + [p.movement_id for p in self.pedestrians]
+            for token in self.phases[self.phase_index].movements:
+                if token.endswith(":*"):
+                    active.update(key for key in all_ids if key.startswith(token[:-1]))
+                else:
+                    active.add(token)
         p.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
         p.setPen(QColor("#ffffff"))
         p.drawText(8, 18, f"Фаза: {self.phase_name}   |   {'ПАУЗА' if not self.running else 'СИМУЛЯЦИЯ'}")
