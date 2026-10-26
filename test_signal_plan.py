@@ -84,3 +84,40 @@ def test_detailed_simulation_does_not_guess_empty_phase_assignments():
     result = simulate_detailed([MovementDemand("Север", 1, "Прямо", 3600)], [], plan.phases, 10, 1800, 1)
     assert result.arrivals == 10
     assert result.served == 0
+
+
+
+def test_conflicting_opposing_left_turn_blocks_both_movements():
+    from app.simulation.detailed import MovementDemand, simulate_detailed
+    phase = Phase("Конфликтная фаза", 20, 3, 2,
+                  movements=["Север:1:Налево", "Юг:1:Прямо"])
+    movements = [
+        MovementDemand("Север", 1, "Налево", 3600),
+        MovementDemand("Юг", 1, "Прямо", 3600),
+    ]
+    result = simulate_detailed(movements, [], [phase], 20, 3600, 1)
+    assert result.arrivals == 40
+    assert result.served == 0
+    assert result.phase_conflicts
+    assert "КОНФЛИКТЫ ДВИЖЕНИЙ" in result.report()
+    assert "стоп-линии" in result.report()
+
+
+def test_perpendicular_traffic_movements_are_flagged_as_conflicting():
+    from app.simulation.detailed import MovementDemand, find_phase_conflicts
+    north = MovementDemand("Север", 1, "Прямо", 600)
+    east = MovementDemand("Восток", 1, "Прямо", 600)
+    conflicts = find_phase_conflicts(
+        {north.movement_id, east.movement_id}, [north, east], []
+    )
+    assert conflicts == [(north.movement_id, east.movement_id)]
+
+
+def test_vehicle_conflicts_with_pedestrian_crossing_on_its_approach():
+    from app.simulation.detailed import MovementDemand, PedestrianDemand, find_phase_conflicts
+    vehicle = MovementDemand("Север", 1, "Прямо", 600)
+    pedestrian = PedestrianDemand("Север", 300)
+    conflicts = find_phase_conflicts(
+        {vehicle.movement_id, pedestrian.movement_id}, [vehicle], [pedestrian]
+    )
+    assert conflicts == [(vehicle.movement_id, pedestrian.movement_id)]
