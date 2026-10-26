@@ -8,6 +8,7 @@ from math import hypot
 from PySide6.QtCore import Qt, QTimer, QPointF
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPainterPath
 from PySide6.QtWidgets import QWidget
+from app.simulation.detailed import find_phase_conflicts
 
 
 class TrafficScene(QWidget):
@@ -216,7 +217,9 @@ class TrafficScene(QWidget):
                 active.update(key for key in all_ids if key.startswith(token[:-1]))
             else:
                 active.add(token)
-        return active
+        conflicts = find_phase_conflicts(active, self.movements, self.pedestrians)
+        blocked = {movement_id for pair in conflicts for movement_id in pair}
+        return active - blocked
 
     @staticmethod
     def _movement_state(movement_id, stage, active):
