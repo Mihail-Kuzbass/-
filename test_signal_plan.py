@@ -138,3 +138,26 @@ def test_conflict_resolution_keeps_safe_straight_movements_green():
     assert north_straight.movement_id in permitted
     assert south_straight.movement_id in permitted
     assert north_left.movement_id not in permitted
+
+
+
+def test_right_turn_does_not_conflict_with_perpendicular_straight_vehicle():
+    from app.simulation.detailed import MovementDemand, vehicle_movements_conflict
+    right_turn = MovementDemand("Север", 1, "Направо", 600)
+    cross_straight = MovementDemand("Восток", 1, "Прямо", 600)
+    assert not vehicle_movements_conflict(right_turn, cross_straight)
+
+
+def test_mandatory_sign_restricts_vehicle_movement():
+    from app.signs import movement_allowed_by_signs
+    signs = [{"approach": "Север", "code": "4.1.2"}]
+    assert movement_allowed_by_signs("Север", "Направо", signs)
+    assert not movement_allowed_by_signs("Север", "Прямо", signs)
+    assert not movement_allowed_by_signs("Север", "Налево", signs)
+
+
+def test_prohibitory_sign_blocks_right_turn():
+    from app.signs import movement_allowed_by_signs
+    signs = [{"approach": "Запад", "code": "3.18.1"}]
+    assert not movement_allowed_by_signs("Запад", "Направо", signs)
+    assert movement_allowed_by_signs("Запад", "Прямо", signs)
