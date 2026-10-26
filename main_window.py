@@ -198,7 +198,9 @@ class MainWindow(QMainWindow):
         arrow_row.addWidget(arrows)
         arrow_row.addStretch()
         layout.addLayout(arrow_row)
-        self.scheme = IntersectionView(); layout.addWidget(self.scheme, 1)
+        self.scheme = IntersectionView()
+        self.scheme.set_lane_turns(self.lane_turns)
+        layout.addWidget(self.scheme, 1)
         buttons = QHBoxLayout()
         save = QPushButton("Сохранить схему…"); save.clicked.connect(self._save_intersection); buttons.addWidget(save)
         load = QPushButton("Загрузить схему…"); load.clicked.connect(self._load_intersection); buttons.addWidget(load)
@@ -208,6 +210,7 @@ class MainWindow(QMainWindow):
     def _lane_count_changed(self, approach, count):
         if hasattr(self, "scheme"):
             self.scheme.set_lane_count(approach, count)
+            self.scheme.set_lane_turns(self.lane_turns)
         for key in list(self.lane_turns):
             if key[0] == approach and key[1] > count:
                 del self.lane_turns[key]
@@ -221,6 +224,7 @@ class MainWindow(QMainWindow):
         dialog = LaneArrowDialog(counts, self.lane_turns, self)
         if dialog.exec():
             self.lane_turns = dialog.values()
+            self.scheme.set_lane_turns(self.lane_turns)
             if hasattr(self, "movement_table"):
                 self._refresh_movement_rows()
             self.statusBar().showMessage("Разрешённые манёвры по полосам обновлены.", 5000)
