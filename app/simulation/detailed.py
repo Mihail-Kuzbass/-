@@ -47,13 +47,18 @@ def vehicle_movements_conflict(first, second):
     """Conservative conflict rules for a schematic four-leg, right-hand-traffic junction."""
     if first.approach == second.approach:
         return False
-    # A right turn follows the near corner in right-hand traffic and normally
-    # does not cross perpendicular vehicle trajectories. Pedestrian crossings
-    # are handled separately by vehicle_pedestrian_conflict().
-    if first.turn == "Направо" or second.turn == "Направо":
-        return False
-    if _OPPOSITE.get(first.approach) == second.approach:
+    opposite_approaches = _OPPOSITE.get(first.approach) == second.approach
+    if opposite_approaches:
+        # Opposing left turns can cross the other vehicle's path.
         return first.turn == "Налево" or second.turn == "Налево"
+
+    # On perpendicular approaches, a right turn and a straight movement are
+    # treated as non-conflicting in this schematic model. A right turn versus
+    # a left turn or another right turn remains conservative/conflicting.
+    if first.turn == "Направо" and second.turn == "Прямо":
+        return False
+    if second.turn == "Направо" and first.turn == "Прямо":
+        return False
     return True
 
 
