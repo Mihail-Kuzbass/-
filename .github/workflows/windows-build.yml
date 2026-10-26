@@ -35,7 +35,7 @@ jobs:
         shell: pwsh
         run: |
           $env:QT_QPA_PLATFORM = "offscreen"
-          python -c "from PySide6.QtWidgets import QApplication; from main_window import MainWindow; app = QApplication([]); window = MainWindow(); print('GUI startup OK:', window.windowTitle()); window.close()"
+          python -c "from PySide6.QtWidgets import QApplication; from main_window import MainWindow; app = QApplication([]); window = MainWindow(); print('GUI startup OK'); window.close()"
 
       - name: Build Windows application
         run: >
