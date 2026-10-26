@@ -40,19 +40,20 @@ class IntersectionView(QWidget):
         p.drawLine(int(cx), int(cy+road_w/2), int(cx), h)
         p.drawLine(0, int(cy), int(cx-road_w/2), int(cy))
         p.drawLine(int(cx+road_w/2), int(cy), w, int(cy))
-        # Draw lane separators; counts are configurable independently for each approach.
+        # Right-hand traffic: lane separators are drawn only in each approach's
+        # half of the carriageway, keeping opposing directions apart.
         p.setPen(QPen(QColor("#cbd0d3"), 1))
         for i in range(1, self.lane_counts["Север"]):
-            x = cx-road_w/2 + road_w*i/self.lane_counts["Север"]
+            x = cx-road_w/2 + road_w*i/(2*self.lane_counts["Север"])
             p.drawLine(int(x), 0, int(x), int(cy-road_w/2))
         for i in range(1, self.lane_counts["Юг"]):
-            x = cx-road_w/2 + road_w*i/self.lane_counts["Юг"]
+            x = cx + road_w*i/(2*self.lane_counts["Юг"])
             p.drawLine(int(x), int(cy+road_w/2), int(x), h)
         for i in range(1, self.lane_counts["Запад"]):
-            y = cy-road_w/2 + road_w*i/self.lane_counts["Запад"]
+            y = cy + road_w*i/(2*self.lane_counts["Запад"])
             p.drawLine(0, int(y), int(cx-road_w/2), int(y))
         for i in range(1, self.lane_counts["Восток"]):
-            y = cy-road_w/2 + road_w*i/self.lane_counts["Восток"]
+            y = cy-road_w/2 + road_w*i/(2*self.lane_counts["Восток"])
             p.drawLine(int(cx+road_w/2), int(y), w, int(y))
         # Show each lane's permitted turn arrows directly on the schematic.
         arrows = {
@@ -70,13 +71,13 @@ class IntersectionView(QWidget):
                 label = " ".join(arrows[approach][turn] for turn in allowed if turn in arrows[approach])
                 pos = (lane - 0.5) / count
                 if approach == "Север":
-                    x, y = cx-road_w/2+pos*road_w, cy/2
+                    x, y = cx-pos*road_w/2, cy/2
                 elif approach == "Юг":
-                    x, y = cx-road_w/2+pos*road_w, cy+(h-cy)/2
+                    x, y = cx+pos*road_w/2, cy+(h-cy)/2
                 elif approach == "Запад":
-                    x, y = cx/2, cy-road_w/2+pos*road_w
+                    x, y = cx/2, cy+pos*road_w/2
                 else:
-                    x, y = cx+(w-cx)/2, cy-road_w/2+pos*road_w
+                    x, y = cx+(w-cx)/2, cy-pos*road_w/2
                 p.drawText(int(x-16), int(y+4), label)
         p.setPen(QColor("#202020"))
         p.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
@@ -85,4 +86,4 @@ class IntersectionView(QWidget):
         p.drawText(12, h-14, f"ЗАПАД · {self.lane_counts['Запад']}")
         p.drawText(max(12, w-140), h-14, f"ЮГ · {self.lane_counts['Юг']}")
         p.setFont(QFont("Segoe UI", 9))
-        p.drawText(12, h-40, "Стрелки в полосах показывают разрешённые манёвры; схема условная")
+        p.drawText(12, h-40, "Правостороннее движение · Стрелки показывают разрешённые манёвры; схема условная")
