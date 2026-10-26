@@ -70,3 +70,17 @@ def test_detailed_simulation_rejects_negative_demand():
     from app.simulation.detailed import MovementDemand, simulate_detailed
     with pytest.raises(ValueError):
         simulate_detailed([MovementDemand("Север", 1, "Прямо", -1)], [], SignalPlan.default().phases)
+
+
+def test_default_plan_assigns_phases_to_separate_approaches():
+    plan = SignalPlan.default()
+    assert plan.phases[0].movements == ["Север:*", "Юг:*"]
+    assert plan.phases[1].movements == ["Восток:*", "Запад:*"]
+
+
+def test_detailed_simulation_does_not_guess_empty_phase_assignments():
+    from app.simulation.detailed import MovementDemand, simulate_detailed
+    plan = SignalPlan([Phase("Без назначения", 5, 0, 0)])
+    result = simulate_detailed([MovementDemand("Север", 1, "Прямо", 3600)], [], plan.phases, 10, 1800, 1)
+    assert result.arrivals == 10
+    assert result.served == 0
