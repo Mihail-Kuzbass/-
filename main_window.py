@@ -484,6 +484,10 @@ class MainWindow(QMainWindow):
         start = QPushButton("▶ Запуск анимации")
         start.clicked.connect(self.traffic_scene.start)
         controls.addWidget(start)
+        self.speed_button = QPushButton("Скорость: 1×")
+        self.speed_button.setToolTip("Переключить скорость анимации между обычной и двойной")
+        self.speed_button.clicked.connect(self._toggle_animation_speed)
+        controls.addWidget(self.speed_button)
         pause = QPushButton("Ⅱ Пауза")
         pause.clicked.connect(self.traffic_scene.pause)
         controls.addWidget(pause)
@@ -548,6 +552,11 @@ class MainWindow(QMainWindow):
                 raise ValueError(f"Пешеходная строка {row + 1}: проверьте название перехода и интенсивность.")
             pedestrians.append(PedestrianDemand(crossing, demand))
         return movements, pedestrians
+
+    def _toggle_animation_speed(self):
+        multiplier = 2 if self.traffic_scene.speed_multiplier == 1 else 1
+        self.traffic_scene.set_speed(multiplier)
+        self.speed_button.setText(f"Скорость: {multiplier}×")
 
     def _run_detailed(self):
         if not self._apply_phases():
