@@ -72,7 +72,7 @@ class TrafficScene(QWidget):
         self.ped_spawn_clock.clear()
         self.playback_events = sorted((getattr(result, "events", None) or []), key=lambda e: (e["time"], 0 if e["kind"].endswith("arrival") else 1))
         self.event_cursor = 0
-        self.replay_mode = bool(self.playback_events)
+        self.replay_mode = result is not None
         self.update()
 
     def start(self):
