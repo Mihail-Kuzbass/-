@@ -218,3 +218,33 @@ def test_microsimulation_conflicting_movements_cannot_enter_together():
             entries.setdefault(event["time"], []).append(event["movement_id"])
     assert all(not ({"Север:1:Прямо", "Восток:1:Прямо"} <= set(ids))
                for ids in entries.values())
+
+
+def test_osm_intersection_import_infers_approaches_and_lane_estimates():
+    from road_network import infer_intersection_approaches
+    center = [37.0, 55.0]
+    features = []
+    for index, point in enumerate([
+        [37.0, 55.001], [37.001, 55.0], [37.0, 54.999], [36.999, 55.0]
+    ]):
+        features.append({
+            "type": "Feature",
+            "properties": {"highway": "primary", "lanes": "4", "osm_id": index + 1, "name": "Main road"},
+            "geometry": {"type": "LineString", "coordinates": [point, center]},
+        })
+    result = infer_intersection_approaches(
+        {"type": "FeatureCollection", "features": features}, 55.0, 37.0
+    )
+    assert result["detected_approach_count"] == 4
+    assert set(result["approaches"]) == {"Север", "Восток", "Юг", "Запад"}
+    assert all(item["lanes"] == 2 for item in result["approaches"].values())
+
+
+def test_osm_intersection_import_rejects_point_without_enough_approaches():
+    from road_network import RoadNetworkError, infer_intersection_approaches
+    data = {"type": "FeatureCollection", "features": [{
+        "type": "Feature", "properties": {"highway": "residential", "osm_id": 1},
+        "geometry": {"type": "LineString", "coordinates": [[37.0, 55.0], [37.001, 55.0]]},
+    }]}
+    with pytest.raises(RoadNetworkError):
+        infer_intersection_approaches(data, 55.0, 37.0)
