@@ -9,6 +9,7 @@ from app.signals.plan import Phase, SignalPlan
 from app.simulation.engine import SimulationConfig, run_simulation
 from app.simulation.detailed import MovementDemand, PedestrianDemand, simulate_detailed
 from app.editor.traffic_scene import TrafficScene
+from app.signs import SIGN_CATALOG
 from app.editor.osm_road_preview import OSMRoadPreview
 from app.editor.movement_dialogs import LaneArrowDialog, PhaseMovementDialog
 from app.integrations.dgis import DGisClient, DGisError
@@ -519,6 +520,28 @@ class MainWindow(QMainWindow):
         )
         intro.setWordWrap(True)
         outer.addWidget(intro)
+        sign_box = QGroupBox("Дорожные знаки (ПДД РФ)")
+        sign_layout = QHBoxLayout(sign_box)
+        self.sign_approach_combo = QComboBox()
+        self.sign_approach_combo.addItems(("Север", "Восток", "Юг", "Запад"))
+        self.sign_code_combo = QComboBox()
+        for code, (name, group) in SIGN_CATALOG.items():
+            self.sign_code_combo.addItem(f"{code} — {name}", code)
+        add_sign = QPushButton("Добавить знак")
+        add_sign.clicked.connect(self._add_road_sign)
+        remove_sign = QPushButton("Убрать знаки с подхода")
+        remove_sign.clicked.connect(self._remove_road_signs)
+        sign_layout.addWidget(QLabel("Подход:"))
+        sign_layout.addWidget(self.sign_approach_combo)
+        sign_layout.addWidget(QLabel("Знак:"))
+        sign_layout.addWidget(self.sign_code_combo, 2)
+        sign_layout.addWidget(add_sign)
+        sign_layout.addWidget(remove_sign)
+        outer.addWidget(sign_box)
+        self.road_signs_label = QLabel("Установленные знаки: нет")
+        self.road_signs_label.setWordWrap(True)
+        outer.addWidget(self.road_signs_label)
+
         split = QHBoxLayout()
         tables = QVBoxLayout()
         move_box = QGroupBox("Транспортный спрос — авт./ч")
@@ -588,6 +611,43 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.detailed_results)
         self._refresh_movement_rows()
         return w
+
+    def _add_road_sign(self):
+        approach = self.sign_approach_combo.currentText()
+        code = self.sign_code_combo.currentData()
+        if not code:
+            return
+        self.traffic_scene.road_signs = [
+            sign for sign in self.traffic_scene.road_signs
+            if not (sign.get("approach") == approach and sign.get("code") == code)
+        ]
+        self.traffic_scene.road_signs.append({
+            "approach": approach, "code": code, "name": SIGN_CATALOG[code][0]
+        })
+        self.traffic_scene.update()
+        self._refresh_road_signs_label()
+        self.statusBar().showMessage(f"Знак {code} установлен на подходе «{approach}».", 5000)
+
+    def _remove_road_signs(self):
+        approach = self.sign_approach_combo.currentText()
+        self.traffic_scene.road_signs = [
+            sign for sign in self.traffic_scene.road_signs
+            if sign.get("approach") != approach
+        ]
+        self.traffic_scene.update()
+        self._refresh_road_signs_label()
+        self.statusBar().showMessage(f"Знаки с подхода «{approach}» убраны.", 5000)
+
+    def _refresh_road_signs_label(self):
+        signs = self.traffic_scene.road_signs
+        if not signs:
+            self.road_signs_label.setText("Установленные знаки: нет")
+            return
+        entries = [
+            f"{sign.get('approach')}: {sign.get('code')} — {sign.get('name')}"
+            for sign in signs
+        ]
+        self.road_signs_label.setText("Установленные знаки: " + "; ".join(entries))
 
     def _refresh_movement_rows(self):
         previous = {}
