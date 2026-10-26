@@ -121,3 +121,18 @@ def test_vehicle_conflicts_with_pedestrian_crossing_on_its_approach():
         {vehicle.movement_id, pedestrian.movement_id}, [vehicle], [pedestrian]
     )
     assert conflicts == [(vehicle.movement_id, pedestrian.movement_id)]
+
+
+
+def test_conflict_resolution_keeps_safe_straight_movements_green():
+    from app.simulation.detailed import MovementDemand, resolve_phase_movements
+    north_straight = MovementDemand("Север", 1, "Прямо", 600)
+    south_straight = MovementDemand("Юг", 1, "Прямо", 600)
+    north_left = MovementDemand("Север", 1, "Налево", 200)
+    movements = [north_straight, south_straight, north_left]
+    permitted = resolve_phase_movements(
+        {item.movement_id for item in movements}, movements, []
+    )
+    assert north_straight.movement_id in permitted
+    assert south_straight.movement_id in permitted
+    assert north_left.movement_id not in permitted
