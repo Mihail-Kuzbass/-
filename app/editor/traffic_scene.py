@@ -1,55 +1,79 @@
-"""Lane-aware animated signalized intersection schematic.
+"""Animated, lane-aware schematic for a signalized intersection.
 
-The view is intentionally schematic, but signal colors and phase changes are driven by
-individual lane-turn assignments in the active signal plan.
+Vehicles follow complete turn-specific paths across the junction; pedestrians traverse
+the entire marked crossing. This remains a visual teaching model, not calibrated
+microsimulation or a substitute for a surveyed intersection plan.
 """
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QPainter, QColor, QPen, QFont
+from math import hypot
+from PySide6.QtCore import Qt, QTimer, QPointF
+from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPainterPath
 from PySide6.QtWidgets import QWidget
 
 
 class TrafficScene(QWidget):
     APPROACHES = ("Север", "Восток", "Юг", "Запад")
+    TURNS = ("Прямо", "Налево", "Направо")
+    TURN_GLYPHS = {
+        "Север": {"Прямо": "↓", "Налево": "↘", "Направо": "↙"},
+        "Юг": {"Прямо": "↑", "Налево": "↖", "Направо": "↗"},
+        "Восток": {"Прямо": "←", "Налево": "↙", "Направо": "↖"},
+        "Запад": {"Прямо": "→", "Налево": "↗", "Направо": "↘"},
+    }
+    COLORS = {
+        "green": QColor("#22c55e"), "flash": QColor("#86efac"),
+        "yellow": QColor("#facc15"), "red": QColor("#ef4444"),
+        "intergreen": QColor("#ef4444"),
+    }
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(560, 420)
+        self.setMinimumSize(620, 480)
         self.running = False
-        self.tick = 0
-        self.phase_name = "Готов к запуску"
-        self.phase_index = 0
+        self.speed_multiplier = 1
+        self.sim_time = 0.0
         self.phase_elapsed = 0.0
-        self.cycle_seconds = 1
+        self.phase_index = 0
         self.phases = []
         self.movements = []
         self.pedestrians = []
         self.lane_counts = {name: 2 for name in self.APPROACHES}
         self.lane_turns = {}
+        self.vehicles = []
+        self.walkers = []
+        self.spawn_clock = {}
+        self.ped_spawn_clock = {}
+        self._geometry = None
         self.timer = QTimer(self)
-        self.timer.setInterval(100)
+        self.timer.setInterval(50)
         self.timer.timeout.connect(self._advance)
 
+    def set_speed(self, multiplier):
+        self.speed_multiplier = 2 if int(multiplier) >= 2 else 1
+        self.update()
+
     def configure(self, phases, movements, pedestrians, cycle_seconds, lane_counts=None, lane_turns=None):
+        self.pause()
         self.phases = list(phases)
         self.movements = list(movements)
         self.pedestrians = list(pedestrians)
-        self.cycle_seconds = max(1, int(cycle_seconds))
         if lane_counts:
             self.lane_counts = dict(lane_counts)
         if lane_turns is not None:
             self.lane_turns = dict(lane_turns)
-        self.tick = 0
-        self.phase_index = 0
+        self.sim_time = 0.0
         self.phase_elapsed = 0.0
-        self._update_phase()
+        self.phase_index = 0
+        self.vehicles.clear()
+        self.walkers.clear()
+        self.spawn_clock.clear()
+        self.ped_spawn_clock.clear()
         self.update()
 
     def start(self):
-        if not self.phases:
-            return
-        self.running = True
-        self.timer.start()
-        self.update()
+        if self.phases:
+            self.running = True
+            self.timer.start()
+            self.update()
 
     def pause(self):
         self.running = False
@@ -58,25 +82,33 @@ class TrafficScene(QWidget):
 
     def reset(self):
         self.pause()
-        self.tick = 0
-        self.phase_index = 0
+        self.sim_time = 0.0
         self.phase_elapsed = 0.0
-        self._update_phase()
+        self.phase_index = 0
+        self.vehicles.clear()
+        self.walkers.clear()
+        self.spawn_clock.clear()
+        self.ped_spawn_clock.clear()
         self.update()
 
     def _advance(self):
-        self.tick += 1
-        self.phase_elapsed += 0.1
+        dt = 0.05 * self.speed_multiplier
+        self.sim_time += dt
+        self.phase_elapsed += dt
         if self.phases:
-            current = self.phases[self.phase_index]
-            if self.phase_elapsed >= max(1, current.duration_seconds):
-                self.phase_elapsed = 0.0
+            duration = max(1, self.phases[self.phase_index].duration_seconds)
+            if self.phase_elapsed >= duration:
+                self.phase_elapsed -= duration
                 self.phase_index = (self.phase_index + 1) % len(self.phases)
-            self._update_phase()
+        stage, active = self._stage(), self._active_ids()
+        self._spawn_eligible(stage, active, dt)
+        for vehicle in self.vehicles:
+            vehicle["distance"] += vehicle["speed"] * dt
+        self.vehicles = [v for v in self.vehicles if v["distance"] < v["length"]]
+        for walker in self.walkers:
+            walker["distance"] += walker["speed"] * dt
+        self.walkers = [v for v in self.walkers if v["distance"] < v["length"]]
         self.update()
-
-    def _update_phase(self):
-        self.phase_name = self.phases[self.phase_index].name if self.phases else "Нет фаз"
 
     def _stage(self):
         if not self.phases:
@@ -108,156 +140,291 @@ class TrafficScene(QWidget):
                 active.add(token)
         return active
 
-    def _movement_state(self, movement_id, stage, active):
+    @staticmethod
+    def _movement_state(movement_id, stage, active):
         if movement_id not in active:
             return "red"
-        if stage in ("green", "flash", "yellow"):
-            return stage
-        return "red"
+        return stage if stage in ("green", "flash", "yellow") else "red"
+
+    def _spawn_eligible(self, stage, active, dt):
+        can_move = stage in ("green", "flash")
+        if can_move:
+            for demand in self.movements:
+                key = demand.movement_id
+                if key not in active:
+                    continue
+                rate = max(1, int(getattr(demand, "vehicles_per_hour", getattr(demand, "vehicles_per_hour", 0)) or 0))
+                # MovementDemand stores its hourly demand as vehicles_per_hour in the current model.
+                if hasattr(demand, "vehicles_per_hour"):
+                    rate = max(0, int(demand.vehicles_per_hour))
+                elif hasattr(demand, "volume_per_hour"):
+                    rate = max(0, int(demand.volume_per_hour))
+                else:
+                    rate = max(0, int(getattr(demand, "demand_per_hour", 0)))
+                if rate <= 0:
+                    continue
+                self.spawn_clock[key] = self.spawn_clock.get(key, 0.0) + dt
+                interval = max(1.25, 3600.0 / rate)
+                if self.spawn_clock[key] >= interval and not any(v["key"] == key and v["distance"] < 42 for v in self.vehicles):
+                    path = self._vehicle_path(demand.approach, demand.lane, demand.turn)
+                    length = path.length()
+                    if length > 0:
+                        self.vehicles.append({"key": key, "path": path, "distance": 0.0,
+                                              "length": length, "speed": 92.0, "turn": demand.turn})
+                        self.spawn_clock[key] = 0.0
+        for pedestrian in self.pedestrians:
+            key = pedestrian.movement_id
+            state = self._movement_state(key, stage, active)
+            if state not in ("green", "flash"):
+                continue
+            rate = max(0, int(getattr(pedestrian, "pedestrians_per_hour", 0)))
+            if rate <= 0:
+                continue
+            self.ped_spawn_clock[key] = self.ped_spawn_clock.get(key, 0.0) + dt
+            interval = max(0.8, 3600.0 / rate)
+            if self.ped_spawn_clock[key] >= interval and not any(v["key"] == key and v["distance"] < 18 for v in self.walkers):
+                path = self._pedestrian_path(pedestrian.crossing)
+                self.walkers.append({"key": key, "path": path, "distance": 0.0,
+                                     "length": path.length(), "speed": 48.0})
+                self.ped_spawn_clock[key] = 0.0
+
+    def _layout(self):
+        w, h = float(self.width()), float(self.height())
+        road_w = min(w * 0.47, h * 0.58)
+        cx, cy = w / 2, h / 2 + 5
+        left, right = cx - road_w / 2, cx + road_w / 2
+        top, bottom = cy - road_w / 2, cy + road_w / 2
+        return {"w": w, "h": h, "cx": cx, "cy": cy, "road": road_w,
+                "left": left, "right": right, "top": top, "bottom": bottom}
+
+    def _lane_center(self, approach, lane, g):
+        count = max(1, self.lane_counts.get(approach, 1))
+        pos = (lane - 0.5) / count
+        if approach in ("Север", "Юг"):
+            return QPointF(g["left"] + pos * g["road"], g["top"] if approach == "Север" else g["bottom"])
+        return QPointF(g["left"] if approach == "Запад" else g["right"],
+                       g["top"] + pos * g["road"])
+
+    def _vehicle_path(self, approach, lane, turn):
+        g = self._layout()
+        center = self._lane_center(approach, lane, g)
+        cx, cy, left, right, top, bottom = (g[k] for k in ("cx", "cy", "left", "right", "top", "bottom"))
+        margin = 95.0
+        if approach == "Север":
+            start = QPointF(center.x(), -margin); entry = QPointF(center.x(), top)
+            exit_side = {"Прямо": "Юг", "Налево": "Восток", "Направо": "Запад"}[turn]
+        elif approach == "Юг":
+            start = QPointF(center.x(), g["h"] + margin); entry = QPointF(center.x(), bottom)
+            exit_side = {"Прямо": "Север", "Налево": "Запад", "Направо": "Восток"}[turn]
+        elif approach == "Запад":
+            start = QPointF(-margin, center.y()); entry = QPointF(left, center.y())
+            exit_side = {"Прямо": "Восток", "Налево": "Север", "Направо": "Юг"}[turn]
+        else:
+            start = QPointF(g["w"] + margin, center.y()); entry = QPointF(right, center.y())
+            exit_side = {"Прямо": "Запад", "Налево": "Юг", "Направо": "Север"}[turn]
+        exit_pos = (lane - 0.5) / max(1, self.lane_counts.get(approach, 1))
+        if exit_side in ("Север", "Юг"):
+            ex = left + exit_pos * g["road"]
+            end = QPointF(ex, -margin if exit_side == "Север" else g["h"] + margin)
+        else:
+            ey = top + exit_pos * g["road"]
+            end = QPointF(-margin if exit_side == "Запад" else g["w"] + margin, ey)
+        path = QPainterPath(start)
+        if approach == exit_side:
+            path.lineTo(end)
+            return path
+        if approach in ("Север", "Юг"):
+            c1 = QPointF(entry.x(), cy)
+        else:
+            c1 = QPointF(cx, entry.y())
+        if exit_side in ("Север", "Юг"):
+            c2 = QPointF(end.x(), cy)
+        else:
+            c2 = QPointF(cx, end.y())
+        path.cubicTo(c1, c2, end)
+        return path
+
+    def _pedestrian_path(self, crossing):
+        g = self._layout()
+        cx, cy, left, right, top, bottom, road = (g[k] for k in ("cx", "cy", "left", "right", "top", "bottom", "road"))
+        margin = 30.0
+        path = QPainterPath()
+        if crossing == "Север":
+            path.moveTo(cx - road * .40, top - margin)
+            path.lineTo(cx - road * .40, top + road + margin)
+        elif crossing == "Юг":
+            path.moveTo(cx + road * .40, bottom + margin)
+            path.lineTo(cx + road * .40, bottom - road - margin)
+        elif crossing == "Запад":
+            path.moveTo(left - margin, cy - road * .40)
+            path.lineTo(right + margin, cy - road * .40)
+        else:
+            path.moveTo(right + margin, cy + road * .40)
+            path.lineTo(left - margin, cy + road * .40)
+        return path
+
+    def _point_at(self, item):
+        path = item["path"]
+        length = max(1.0, item["length"])
+        return path.pointAtPercent(min(1.0, item["distance"] / length))
 
     @staticmethod
-    def _color(state):
-        return {
-            "green": QColor("#22c55e"),
-            "flash": QColor("#86efac"),
-            "yellow": QColor("#facc15"),
-            "red": QColor("#ef4444"),
-            "intergreen": QColor("#64748b"),
-        }.get(state, QColor("#ef4444"))
+    def _draw_arrow(p, x, y, glyph, color=QColor("#f8fafc")):
+        p.setPen(color)
+        p.setFont(QFont("Segoe UI Symbol", 12, QFont.Weight.Bold))
+        p.drawText(int(x - 9), int(y + 5), glyph)
+
+    def _draw_signal_head(self, p, x, y, state, horizontal=False):
+        p.save()
+        p.setPen(QPen(QColor("#0f172a"), 1))
+        p.setBrush(QColor("#111827"))
+        if horizontal:
+            p.drawRoundedRect(int(x - 22), int(y - 8), 44, 16, 5, 5)
+            centers = [(x - 12, y), (x, y), (x + 12, y)]
+        else:
+            p.drawRoundedRect(int(x - 8), int(y - 22), 16, 44, 5, 5)
+            centers = [(x, y - 12), (x, y), (x, y + 12)]
+        active_index = {"red": 0, "yellow": 1, "green": 2, "flash": 2}.get(state, 0)
+        colors = [QColor("#ef4444"), QColor("#facc15"), QColor("#22c55e")]
+        for i, (lx, ly) in enumerate(centers):
+            color = colors[i] if i == active_index else QColor("#3f4854")
+            if i == 2 and state == "flash" and int(self.sim_time * 4) % 2:
+                color = QColor("#3f4854")
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(color)
+            p.drawEllipse(int(lx - 4), int(ly - 4), 8, 8)
+        p.restore()
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.fillRect(self.rect(), QColor("#eaf0e8"))
-        w, h = self.width(), self.height()
-        cx, cy = w / 2, h / 2
-        road_w = min(w, h) * 0.38
-        left, right = cx-road_w/2, cx+road_w/2
-        top, bottom = cy-road_w/2, cy+road_w/2
+        g = self._layout()
+        w, h, cx, cy, road = (g[k] for k in ("w", "h", "cx", "cy", "road"))
+        left, right, top, bottom = (g[k] for k in ("left", "right", "top", "bottom"))
+        # Header and intersection surface.
+        p.setPen(QColor("#172033"))
+        p.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        phase = self.phases[self.phase_index] if self.phases else None
+        stage = self._stage()
+        stage_label = {"green": "ЗЕЛЁНЫЙ", "flash": "МИГАЮЩИЙ ЗЕЛЁНЫЙ", "yellow": "ЖЁЛТЫЙ",
+                       "red": "КРАСНЫЙ", "intergreen": "ВСЕМ КРАСНЫЙ"}[stage]
+        phase_label = phase.name if phase else "Фазы не заданы"
+        p.drawText(10, 18, f"ФАЗА {self.phase_index + 1 if phase else 0}: {phase_label} · {stage_label}")
+        p.setFont(QFont("Segoe UI", 8))
+        p.drawText(10, 35, f"Время: {self.phase_elapsed:.1f} с · Скорость: {self.speed_multiplier}× · "
+                            f"{'АНИМАЦИЯ' if self.running else 'ПАУЗА'}")
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor("#39434d"))
-        p.drawRect(int(left), 0, int(road_w), h)
-        p.drawRect(0, int(top), w, int(road_w))
-
-        # Lane separators are drawn using the independently configured lane count for each approach.
-        p.setPen(QPen(QColor("#cbd5e1"), 1, Qt.PenStyle.DashLine))
+        p.setBrush(QColor("#3b434d"))
+        p.drawRect(int(left), 0, int(road), int(h))
+        p.drawRect(0, int(top), int(w), int(road))
+        # Dashed lane markings on each approach.
+        p.setPen(QPen(QColor("#b9c2ca"), 1, Qt.PenStyle.DashLine))
         for approach in ("Север", "Юг"):
             count = max(1, self.lane_counts.get(approach, 1))
             for i in range(1, count):
-                x = left + road_w * i / count
+                x = left + road * i / count
                 if approach == "Север":
-                    p.drawLine(int(x), 0, int(x), int(top))
+                    p.drawLine(int(x), 42, int(x), int(top))
                 else:
-                    p.drawLine(int(x), int(bottom), int(x), h)
+                    p.drawLine(int(x), int(bottom), int(x), int(h - 42))
         for approach in ("Запад", "Восток"):
             count = max(1, self.lane_counts.get(approach, 1))
             for i in range(1, count):
-                y = top + road_w * i / count
+                y = top + road * i / count
                 if approach == "Запад":
                     p.drawLine(0, int(y), int(left), int(y))
                 else:
-                    p.drawLine(int(right), int(y), w, int(y))
-
-        # Stop lines and crosswalks.
-        p.setPen(QPen(QColor("#ffffff"), 3))
-        p.drawLine(int(left), int(top-7), int(right), int(top-7))
-        p.drawLine(int(left), int(bottom+7), int(right), int(bottom+7))
-        p.drawLine(int(left-7), int(top), int(left-7), int(bottom))
-        p.drawLine(int(right+7), int(top), int(right+7), int(bottom))
+                    p.drawLine(int(right), int(y), int(w), int(y))
+        # Crosswalks with zebra stripes and stop lines.
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor("#f8fafc"))
-        for i in range(7):
-            off = -road_w/2 + i*road_w/7
-            p.drawRect(int(cx+off), int(top-22), int(road_w/14), 10)
-            p.drawRect(int(cx+off), int(bottom+12), int(road_w/14), 10)
-            p.drawRect(int(left-22), int(cy+off), 10, int(road_w/14))
-            p.drawRect(int(right+12), int(cy+off), 10, int(road_w/14))
-
-        stage = self._stage()
+        stripe_count = 8
+        for i in range(stripe_count):
+            off = i * road / stripe_count
+            stripe = road / (stripe_count * 2)
+            p.drawRect(int(left + off), int(top - 25), int(stripe), 18)
+            p.drawRect(int(left + off), int(bottom + 7), int(stripe), 18)
+            p.drawRect(int(left - 25), int(top + off), 18, int(stripe))
+            p.drawRect(int(right + 7), int(top + off), 18, int(stripe))
+        p.setPen(QPen(QColor("#ffffff"), 3))
+        p.drawLine(int(left), int(top - 29), int(right), int(top - 29))
+        p.drawLine(int(left), int(bottom + 29), int(right), int(bottom + 29))
+        p.drawLine(int(left - 29), int(top), int(left - 29), int(bottom))
+        p.drawLine(int(right + 29), int(top), int(right + 29), int(bottom))
+        # Turn arrows sit in their actual lanes, facing the direction of travel.
+        for approach in self.APPROACHES:
+            for lane in range(1, max(1, self.lane_counts.get(approach, 1)) + 1):
+                pos = self._lane_center(approach, lane, g)
+                turns = self.lane_turns.get((approach, lane), self.TURNS)
+                if approach == "Север":
+                    x, y = pos.x(), top - 50
+                elif approach == "Юг":
+                    x, y = pos.x(), bottom + 52
+                elif approach == "Запад":
+                    x, y = left - 52, pos.y()
+                else:
+                    x, y = right + 52, pos.y()
+                for j, turn in enumerate(turns):
+                    self._draw_arrow(p, x + (j - (len(turns)-1)/2) * 17 if approach in ("Север", "Юг") else x,
+                                     y if approach in ("Север", "Юг") else y + (j - (len(turns)-1)/2) * 17,
+                                     self.TURN_GLYPHS[approach].get(turn, "·"))
+        # Signal heads are installed at the stop line, one per lane/approach.
         active = self._active_ids()
-        phase = self.phases[self.phase_index] if self.phases else None
-        p.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
-        p.setPen(QColor("#ffffff"))
-        status = {"green": "ЗЕЛЁНЫЙ", "flash": "МИГАЮЩИЙ ЗЕЛЁНЫЙ",
-                  "yellow": "ЖЁЛТЫЙ", "red": "КРАСНЫЙ", "intergreen": "МЕЖФАЗНЫЙ ИНТЕРВАЛ"}[stage]
-        p.drawText(8, 18, f"ФАЗА {self.phase_index+1 if phase else 0}: {self.phase_name} · {status}")
-        if phase:
-            p.drawText(8, 35, f"Время фазы: {self.phase_elapsed:.1f} / {phase.duration_seconds} с · {'РАБОТАЕТ' if self.running else 'ПАУЗА'}")
-
-        # Each lane has its own turn labels, signal lamp, and vehicle token.
         for approach in self.APPROACHES:
             count = max(1, self.lane_counts.get(approach, 1))
-            for lane in range(1, count+1):
-                turns = self.lane_turns.get((approach, lane), ("Прямо", "Налево", "Направо"))
-                for turn_index, turn in enumerate(turns):
-                    key = f"{approach}:{lane}:{turn}"
-                    state = self._movement_state(key, stage, active)
-                    pos = (lane - 0.5) / count
-                    turn_offset = (turn_index - (len(turns)-1)/2) * 5
-                    if approach == "Север":
-                        x, stop_y = left + pos*road_w + turn_offset, top-10
-                        car_x, car_y = x, (top-38 if state in ("red", "yellow", "intergreen") else (top-55+(self.tick%16)*4))
-                        arrow_x, arrow_y = x, top-65
-                    elif approach == "Юг":
-                        x, stop_y = left + pos*road_w + turn_offset, bottom+10
-                        car_x, car_y = x, (bottom+38 if state in ("red", "yellow", "intergreen") else (bottom+55-(self.tick%16)*4))
-                        arrow_x, arrow_y = x, bottom+65
-                    elif approach == "Запад":
-                        y, stop_x = top + pos*road_w + turn_offset, left-10
-                        car_x, car_y = (left-38 if state in ("red", "yellow", "intergreen") else (left-55+(self.tick%16)*4)), y
-                        arrow_x, arrow_y = left-65, y
-                    else:
-                        y, stop_x = top + pos*road_w + turn_offset, right+10
-                        car_x, car_y = (right+38 if state in ("red", "yellow", "intergreen") else (right+55-(self.tick%16)*4)), y
-                        arrow_x, arrow_y = right+65, y
-                    # Small turn arrow label
-                    p.setPen(QColor("#ffffff"))
-                    p.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
-                    label = {"Прямо": "↑", "Налево": "←", "Направо": "→"}[turn]
-                    if approach == "Юг": label = {"Прямо": "↓", "Налево": "→", "Направо": "←"}[turn]
-                    if approach == "Восток": label = {"Прямо": "←", "Налево": "↓", "Направо": "↑"}[turn]
-                    if approach == "Запад": label = {"Прямо": "→", "Налево": "↑", "Направо": "↓"}[turn]
-                    p.drawText(int(arrow_x-4), int(arrow_y+3), label)
-                    # Lamp is beside the stop line for this exact lane/turn.
-                    p.setPen(QPen(QColor("#111827"), 1))
-                    p.setBrush(self._color(state))
-                    if approach in ("Север", "Юг"):
-                        p.drawEllipse(int(x-4), int(stop_y-4), 8, 8)
-                    else:
-                        p.drawEllipse(int(stop_x-4), int(y-4), 8, 8)
-                    # Vehicle movement is stopped at the stop line on red/yellow/intergreen.
-                    if state in ("green", "flash") and self.running:
-                        p.setBrush(QColor("#38bdf8"))
-                    else:
-                        p.setBrush(QColor("#94a3b8"))
-                    if approach in ("Север", "Юг"):
-                        p.drawRoundedRect(int(car_x-5), int(car_y-8), 10, 16, 3, 3)
-                    else:
-                        p.drawRoundedRect(int(car_x-8), int(car_y-5), 16, 10, 3, 3)
-
-        # Pedestrian crossing lamps are independent phase assignments.
-        for idx, pedestrian in enumerate(self.pedestrians):
-            state = self._movement_state(pedestrian.movement_id, stage, active)
-            p.setPen(QPen(QColor("#111827"), 1))
-            p.setBrush(self._color(state))
-            if pedestrian.crossing == "Север":
-                x, y = cx, top-28
-            elif pedestrian.crossing == "Юг":
-                x, y = cx, bottom+28
-            elif pedestrian.crossing == "Запад":
-                x, y = left-28, cy
-            else:
-                x, y = right+28, cy
-            p.drawRect(int(x-5), int(y-5), 10, 10)
-            p.setPen(QColor("#fef3c7") if state in ("green", "flash") else QColor("#d1d5db"))
-            for j in range(min(5, max(1, pedestrian.pedestrians_per_hour // 300 + 1))):
-                offset = ((self.tick*2 + idx*7 + j*11) % 26) - 13
-                if pedestrian.crossing in ("Север", "Юг"):
-                    px, py = cx+offset, y
+            for lane in range(1, count + 1):
+                turns = self.lane_turns.get((approach, lane), self.TURNS)
+                states = [self._movement_state(f"{approach}:{lane}:{turn}", stage, active) for turn in turns]
+                state = "green" if "green" in states else "flash" if "flash" in states else "yellow" if "yellow" in states else "red"
+                pos = self._lane_center(approach, lane, g)
+                if approach == "Север":
+                    self._draw_signal_head(p, pos.x(), top - 12, state)
+                elif approach == "Юг":
+                    self._draw_signal_head(p, pos.x(), bottom + 12, state)
+                elif approach == "Запад":
+                    self._draw_signal_head(p, left - 12, pos.y(), state, horizontal=True)
                 else:
-                    px, py = x, cy+offset
-                p.drawEllipse(int(px-2), int(py-2), 4, 4)
-
-        p.setPen(QColor("#111827"))
+                    self._draw_signal_head(p, right + 12, pos.y(), state, horizontal=True)
+        # Animate vehicles along complete Bézier paths, including the exit beyond the far curb.
+        for vehicle in self.vehicles:
+            pt = self._point_at(vehicle)
+            tangent = vehicle["path"].pointAtPercent(min(1.0, vehicle["distance"] / max(1.0, vehicle["length"])))
+            p.save()
+            p.translate(pt)
+            p.setPen(QPen(QColor("#082f49"), 1))
+            p.setBrush(QColor("#38bdf8"))
+            if vehicle["key"].startswith(("Север:", "Юг:")):
+                p.drawRoundedRect(-5, -10, 10, 20, 3, 3)
+                p.setBrush(QColor("#bae6fd"))
+                p.drawRect(-3, -6, 6, 5)
+            else:
+                p.drawRoundedRect(-10, -5, 20, 10, 3, 3)
+                p.setBrush(QColor("#bae6fd"))
+                p.drawRect(-6, -3, 5, 6)
+            p.restore()
+        # Pedestrians move along the whole zebra crossing, from one curb to the other.
+        for walker in self.walkers:
+            pt = self._point_at(walker)
+            p.setPen(QPen(QColor("#78350f"), 1))
+            p.setBrush(QColor("#fde68a"))
+            p.drawEllipse(int(pt.x() - 3), int(pt.y() - 3), 6, 6)
+            p.setPen(QPen(QColor("#fde68a"), 2))
+            p.drawLine(int(pt.x()), int(pt.y() + 3), int(pt.x()), int(pt.y() + 8))
+        # Small crossing signal indicators are near each zebra crossing.
+        for pedestrian in self.pedestrians:
+            state = self._movement_state(pedestrian.movement_id, stage, active)
+            if pedestrian.crossing == "Север":
+                x, y = cx, top - 35
+            elif pedestrian.crossing == "Юг":
+                x, y = cx, bottom + 35
+            elif pedestrian.crossing == "Запад":
+                x, y = left - 35, cy
+            else:
+                x, y = right + 35, cy
+            p.setPen(QPen(QColor("#111827"), 1))
+            p.setBrush(self.COLORS.get(state, self.COLORS["red"]))
+            p.drawRoundedRect(int(x - 5), int(y - 5), 10, 10, 2, 2)
+        p.setPen(QColor("#172033"))
         p.setFont(QFont("Segoe UI", 8))
-        p.drawText(8, h-8, "Стрелки и лампы привязаны к полосам/назначениям фазы; схема геометрически условная.")
+        p.drawText(10, int(h - 10), "Схема условная: траектории и переходы показаны полностью; расчёт не калиброван по натурным данным.")
