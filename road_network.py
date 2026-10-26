@@ -14,6 +14,7 @@ import requests
 OVERPASS_ENDPOINTS = (
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
 )
 
 class RoadNetworkError(RuntimeError):
@@ -50,36 +51,51 @@ def fetch_osm_roads(south: float, west: float, north: float, east: float,
 
     query = f'''[out:json][timeout:30];(way["highway"]({south},{west},{north},{east}););out geom;'''
     errors = []
+    headers = {"User-Agent": "TrafficSignalStudio/0.3 (desktop traffic analysis)"}
+    # Public Overpass instances can temporarily return 429/502 or time out.
+    # Retry transient failures briefly, then move to the next independent mirror.
     for endpoint in OVERPASS_ENDPOINTS:
-        try:
-            response = requests.post(endpoint, data={"data": query}, timeout=timeout,
-                                     headers={"User-Agent": "TrafficSignalStudio/0.2 (desktop traffic analysis)"})
-            response.raise_for_status()
-            payload = response.json()
-            features = []
-            for element in payload.get("elements", []):
-                geometry = element.get("geometry") or []
-                if len(geometry) < 2:
-                    continue
-                props = dict(element.get("tags") or {})
-                props.update({"osm_type": element.get("type", "way"), "osm_id": element.get("id")})
-                features.append({"type": "Feature", "id": f"way/{element.get('id')}",
-                    "properties": props, "geometry": {"type": "LineString",
-                    "coordinates": [[p["lon"], p["lat"]] for p in geometry if "lon" in p and "lat" in p]}})
-            if not features:
-                raise RoadNetworkError("В выбранной области дороги не найдены.")
-            result = {"type": "FeatureCollection", "name": "TrafficSignalStudio OSM road import",
-                      "source": "OpenStreetMap via Overpass API", "features": features,
-                      "cache_status": "miss"}
+        for attempt in range(2):
             try:
-                cache_file.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
-            except OSError:
-                # A cache failure should not prevent a successful map import.
-                pass
-            return result
-        except (requests.RequestException, ValueError, KeyError) as exc:
-            errors.append(f"{endpoint}: {exc}")
-    raise RoadNetworkError("Не удалось получить данные дорожной сети. " + " | ".join(errors))
+                response = requests.post(endpoint, data={"data": query}, timeout=timeout,
+                                         headers=headers)
+                response.raise_for_status()
+                payload = response.json()
+                features = []
+                for element in payload.get("elements", []):
+                    geometry = element.get("geometry") or []
+                    if len(geometry) < 2:
+                        continue
+                    props = dict(element.get("tags") or {})
+                    props.update({"osm_type": element.get("type", "way"), "osm_id": element.get("id")})
+                    coordinates = [[p["lon"], p["lat"]] for p in geometry if "lon" in p and "lat" in p]
+                    if len(coordinates) < 2:
+                        continue
+                    features.append({"type": "Feature", "id": f"way/{element.get('id')}",
+                        "properties": props, "geometry": {"type": "LineString",
+                        "coordinates": coordinates}})
+                if not features:
+                    raise RoadNetworkError("В выбранной области дороги не найдены.")
+                result = {"type": "FeatureCollection", "name": "TrafficSignalStudio OSM road import",
+                          "source": "OpenStreetMap via Overpass API", "features": features,
+                          "cache_status": "miss"}
+                try:
+                    cache_file.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+                except OSError:
+                    # A cache failure should not prevent a successful map import.
+                    pass
+                return result
+            except RoadNetworkError:
+                raise
+            except (requests.RequestException, ValueError, KeyError) as exc:
+                errors.append(f"{endpoint} (попытка {attempt + 1}/2): {exc}")
+                if attempt == 0:
+                    time.sleep(1.5)
+    raise RoadNetworkError(
+        "Сервисы OpenStreetMap Overpass временно недоступны или перегружены. "
+        "Повторите импорт позже либо откройте ранее сохранённый GeoJSON. Подробности: "
+        + " | ".join(errors)
+    )
 
 def load_geojson(path: str | Path) -> dict[str, Any]:
     try:
