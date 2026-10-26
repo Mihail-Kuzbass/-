@@ -12,11 +12,16 @@ class IntersectionView(QWidget):
         self.setMinimumSize(500, 400)
         self.lane_counts = {name: 2 for name in self.APPROACHES}
         self.selected_approach = "Север"
+        self.lane_turns = {}
 
     def set_lane_count(self, approach, count):
         if approach not in self.lane_counts:
             raise ValueError(f"Неизвестное направление: {approach}")
         self.lane_counts[approach] = max(1, min(8, int(count)))
+        self.update()
+
+    def set_lane_turns(self, lane_turns):
+        self.lane_turns = dict(lane_turns)
         self.update()
 
     def paintEvent(self, event):
@@ -49,6 +54,30 @@ class IntersectionView(QWidget):
         for i in range(1, self.lane_counts["Восток"]):
             y = cy-road_w/2 + road_w*i/self.lane_counts["Восток"]
             p.drawLine(int(cx+road_w/2), int(y), w, int(y))
+        # Show each lane's permitted turn arrows directly on the schematic.
+        arrows = {
+            "Север": {"Прямо": "↓", "Налево": "→", "Направо": "←"},
+            "Юг": {"Прямо": "↑", "Налево": "←", "Направо": "→"},
+            "Восток": {"Прямо": "←", "Налево": "↓", "Направо": "↑"},
+            "Запад": {"Прямо": "→", "Налево": "↑", "Направо": "↓"},
+        }
+        p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        p.setPen(QColor("#f8fafc"))
+        for approach in self.APPROACHES:
+            count = self.lane_counts[approach]
+            for lane in range(1, count + 1):
+                allowed = self.lane_turns.get((approach, lane), ("Прямо", "Налево", "Направо"))
+                label = " ".join(arrows[approach][turn] for turn in allowed if turn in arrows[approach])
+                pos = (lane - 0.5) / count
+                if approach == "Север":
+                    x, y = cx-road_w/2+pos*road_w, cy/2
+                elif approach == "Юг":
+                    x, y = cx-road_w/2+pos*road_w, cy+(h-cy)/2
+                elif approach == "Запад":
+                    x, y = cx/2, cy-road_w/2+pos*road_w
+                else:
+                    x, y = cx+(w-cx)/2, cy-road_w/2+pos*road_w
+                p.drawText(int(x-16), int(y+4), label)
         p.setPen(QColor("#202020"))
         p.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
         p.drawText(12, 24, f"СЕВЕР · {self.lane_counts['Север']} полос(ы)")
@@ -56,4 +85,4 @@ class IntersectionView(QWidget):
         p.drawText(12, h-14, f"ЗАПАД · {self.lane_counts['Запад']}")
         p.drawText(max(12, w-140), h-14, f"ЮГ · {self.lane_counts['Юг']}")
         p.setFont(QFont("Segoe UI", 9))
-        p.drawText(12, h-40, "Схема условная; проверьте геометрию и разметку перед расчётами")
+        p.drawText(12, h-40, "Стрелки в полосах показывают разрешённые манёвры; схема условная")
