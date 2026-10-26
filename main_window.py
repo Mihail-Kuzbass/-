@@ -360,7 +360,14 @@ class MainWindow(QMainWindow):
         import json
         path, _ = QFileDialog.getSaveFileName(self, "Сохранить схему перекрёстка", "intersection.json", "Схема JSON (*.json)")
         if not path: return
-        data = {"schema_version": 1, "lane_counts": {k: v.value() for k, v in self.lane_spins.items()}}
+        data = {
+            "schema_version": 2,
+            "lane_counts": {k: v.value() for k, v in self.lane_spins.items()},
+            "lane_turns": [
+                {"approach": approach, "lane": lane, "turns": list(turns)}
+                for (approach, lane), turns in sorted(self.lane_turns.items())
+            ],
+        }
         try:
             with open(path, "w", encoding="utf-8") as stream:
                 json.dump(data, stream, ensure_ascii=False, indent=2)
@@ -375,9 +382,29 @@ class MainWindow(QMainWindow):
         try:
             with open(path, "r", encoding="utf-8") as stream:
                 data = json.load(stream)
+            version = data.get("schema_version", 1)
+            if version not in (1, 2):
+                raise ValueError("Неизвестная версия схемы перекрёстка.")
             counts = data["lane_counts"]
             for approach, spin in self.lane_spins.items():
                 spin.setValue(int(counts.get(approach, 2)))
+            if version == 2:
+                restored = {}
+                for item in data.get("lane_turns", []):
+                    approach = item["approach"]
+                    lane = int(item["lane"])
+                    turns = tuple(item["turns"])
+                    if approach not in self.lane_spins or lane < 1 or lane > self.lane_spins[approach].value():
+                        continue
+                    if not turns or any(turn not in ("Прямо", "Налево", "Направо") for turn in turns):
+                        raise ValueError(f"Некорректные манёвры для полосы {approach} {lane}.")
+                    restored[(approach, lane)] = tuple(dict.fromkeys(turns))
+                for approach, spin in self.lane_spins.items():
+                    for lane in range(1, spin.value() + 1):
+                        restored.setdefault((approach, lane), ("Прямо", "Налево", "Направо"))
+                self.lane_turns = restored
+                self.scheme.set_lane_turns(self.lane_turns)
+                self._refresh_movement_rows()
         except (OSError, ValueError, KeyError, TypeError) as exc:
             QMessageBox.warning(self, "Ошибка загрузки схемы", str(exc))
 
