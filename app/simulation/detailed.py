@@ -56,6 +56,34 @@ def vehicle_pedestrian_conflict(vehicle, pedestrian):
             movement_exit_side(vehicle) == pedestrian.crossing)
 
 
+def resolve_phase_movements(active_ids, movements, pedestrians):
+    """Choose a deterministic non-conflicting subset so conflicts do not deadlock a phase."""
+    active_ids = set(active_ids)
+    vehicle_map = {m.movement_id: m for m in movements}
+    pedestrian_map = {p.movement_id: p for p in pedestrians}
+    approach_order = {"Север": 0, "Юг": 1, "Восток": 2, "Запад": 3}
+    turn_order = {"Прямо": 0, "Направо": 1, "Налево": 2}
+    candidates = [vehicle_map[key] for key in active_ids if key in vehicle_map]
+    candidates.sort(key=lambda m: (turn_order.get(m.turn, 3), approach_order.get(m.approach, 9), m.lane))
+    selected_vehicles = []
+    selected_walkers = []
+    for candidate in candidates:
+        if any(vehicle_movements_conflict(candidate, other) for other in selected_vehicles):
+            continue
+        if any(vehicle_pedestrian_conflict(candidate, pedestrian) for pedestrian in selected_walkers):
+            continue
+        selected_vehicles.append(candidate)
+    walkers = [pedestrian_map[key] for key in active_ids if key in pedestrian_map]
+    walkers.sort(key=lambda p: approach_order.get(p.crossing, 9))
+    for candidate in walkers:
+        if any(vehicle_pedestrian_conflict(vehicle, candidate) for vehicle in selected_vehicles):
+            continue
+        if any(other.crossing != candidate.crossing for other in selected_walkers):
+            continue
+        selected_walkers.append(candidate)
+    return {item.movement_id for item in selected_vehicles + selected_walkers}
+
+
 def find_phase_conflicts(active_ids, movements, pedestrians):
     """Return movement pairs that must not receive service simultaneously."""
     active_ids = set(active_ids)
@@ -160,10 +188,10 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
             else:
                 assigned.add(token)
         conflicts = find_phase_conflicts(assigned, movements, pedestrians)
-        blocked = {movement_id for pair in conflicts for movement_id in pair}
         if conflicts:
             phase_conflicts.append((phase.name, conflicts))
-        phases_by_start.append((cursor, cursor + green, assigned - blocked))
+        permitted = resolve_phase_movements(assigned, movements, pedestrians)
+        phases_by_start.append((cursor, cursor + green, permitted))
         cursor += phase.duration_seconds
     queues = {m.movement_id: 0 for m in movements}
     pqueues = {p.movement_id: 0 for p in pedestrians}
