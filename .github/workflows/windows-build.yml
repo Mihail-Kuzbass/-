@@ -5,6 +5,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: traffic-signal-studio-windows-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
