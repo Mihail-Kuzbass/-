@@ -323,6 +323,7 @@ class TrafficScene(QWidget):
         p.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
         phase = self.phases[self.phase_index] if self.phases else None
         stage = self._stage()
+        active = self._active_ids()
         stage_label = {"green": "ЗЕЛЁНЫЙ", "flash": "МИГАЮЩИЙ ЗЕЛЁНЫЙ", "yellow": "ЖЁЛТЫЙ",
                        "red": "КРАСНЫЙ", "intergreen": "ВСЕМ КРАСНЫЙ"}[stage]
         phase_label = phase.name if phase else "Фазы не заданы"
@@ -388,11 +389,12 @@ class TrafficScene(QWidget):
                 else:
                     x, y = right + 52, pos.y()
                 for j, turn in enumerate(turns):
+                    movement_state = self._movement_state(f"{approach}:{lane}:{turn}", stage, active)
+                    arrow_color = self.COLORS.get(movement_state, self.COLORS["red"])
                     self._draw_arrow(p, x + (j - (len(turns)-1)/2) * 17 if approach in ("Север", "Юг") else x,
                                      y if approach in ("Север", "Юг") else y + (j - (len(turns)-1)/2) * 17,
-                                     self.TURN_GLYPHS[approach].get(turn, "·"))
+                                     self.TURN_GLYPHS[approach].get(turn, "·"), arrow_color)
         # Signal heads are installed at the stop line, one per lane/approach.
-        active = self._active_ids()
         for approach in self.APPROACHES:
             count = max(1, self.lane_counts.get(approach, 1))
             for lane in range(1, count + 1):
