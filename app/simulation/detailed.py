@@ -41,6 +41,7 @@ class DetailedResult:
     pedestrians_served: int
     pedestrian_max_queue: int
     pedestrian_final_queue: int
+    events: list = None
 
     @property
     def average_vehicle_delay(self):
@@ -98,6 +99,7 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
     pqueues = {p.movement_id: 0 for p in pedestrians}
     max_queue = max_pqueue = arrivals = served = parrivals = pserved = 0
     queue_seconds = 0.0
+    events = []
     credits = {key: 0.0 for key in queues}
     pcredits = {key: 0.0 for key in pqueues}
     movement_map = {m.movement_id: m for m in movements}
@@ -107,10 +109,12 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
             if rng.random() < demand.vehicles_per_hour / 3600.0:
                 queues[key] += 1
                 arrivals += 1
+                events.append({"time": t, "kind": "vehicle_arrival", "movement_id": key})
         for key, demand in pedestrian_map.items():
             if rng.random() < demand.pedestrians_per_hour / 3600.0:
                 pqueues[key] += 1
                 parrivals += 1
+                events.append({"time": t, "kind": "pedestrian_arrival", "movement_id": key})
         pos = t % cycle
         active = set()
         for start, end, assigned in phases_by_start:
@@ -123,6 +127,7 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
                 if queues[key] and credits[key] >= 1.0:
                     queues[key] -= 1
                     served += 1
+                    events.append({"time": t, "kind": "vehicle_served", "movement_id": key})
                     credits[key] -= 1.0
         for key, demand in pedestrian_map.items():
             if key in active:
@@ -130,10 +135,11 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
                 if pqueues[key] and pcredits[key] >= 1.0:
                     pqueues[key] -= 1
                     pserved += 1
+                    events.append({"time": t, "kind": "pedestrian_served", "movement_id": key})
                     pcredits[key] -= 1.0
         max_queue = max(max_queue, sum(queues.values()))
         max_pqueue = max(max_pqueue, sum(pqueues.values()))
         queue_seconds += sum(queues.values())
     return DetailedResult(duration_seconds, arrivals, served, max_queue,
                           sum(queues.values()), queue_seconds, parrivals, pserved,
-                          max_pqueue, sum(pqueues.values()))
+                          max_pqueue, sum(pqueues.values()), events)
