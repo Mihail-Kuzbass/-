@@ -48,3 +48,25 @@ def test_signal_plan_accepts_more_than_two_phases():
     ])
     assert len(plan.phases) == 3
     assert plan.cycle_seconds == 91
+
+
+def test_detailed_simulation_counts_vehicle_and_pedestrian_demand():
+    from app.simulation.detailed import MovementDemand, PedestrianDemand, simulate_detailed
+    plan = SignalPlan([
+        Phase("Север-Юг", 30, 3, 2, movements=["Север:*", "Юг:*"]),
+        Phase("Восток-Запад и пешеходы", 30, 3, 2,
+              movements=["Восток:*", "Запад:*", "Пешеходы:Север"]),
+    ])
+    movements = [MovementDemand("Север", 1, "Прямо", 600), MovementDemand("Восток", 1, "Прямо", 450)]
+    pedestrians = [PedestrianDemand("Север", 300)]
+    result = simulate_detailed(movements, pedestrians, plan.phases, 600, 1800, 7)
+    assert result.arrivals > 0
+    assert result.pedestrian_arrivals > 0
+    assert 0 <= result.served <= result.arrivals
+    assert 0 <= result.pedestrians_served <= result.pedestrian_arrivals
+
+
+def test_detailed_simulation_rejects_negative_demand():
+    from app.simulation.detailed import MovementDemand, simulate_detailed
+    with pytest.raises(ValueError):
+        simulate_detailed([MovementDemand("Север", 1, "Прямо", -1)], [], SignalPlan.default().phases)
