@@ -155,10 +155,12 @@ class TrafficScene(QWidget):
                                   and v["distance"] < v["length"]
                                   and (not v.get("released", False) or v["distance"] <= v["stop_distance"]))
                     queue_offset = 24.0 * queued
+                    vehicle_type = self._vehicle_type_for_index(len(self.vehicles) + self.event_cursor)
                     self.vehicles.append({"key": key, "path": path, "distance": -queue_offset,
                                           "length": path.length(), "base_stop_distance": base_stop_distance,
                                           "stop_distance": base_stop_distance - queue_offset,
-                                          "speed": 46.0, "turn": demand.turn, "released": False})
+                                          "speed": 46.0, "turn": demand.turn, "vehicle_type": vehicle_type,
+                                          "released": False})
             elif event["kind"] == "vehicle_served":
                 vehicle = next((v for v in self.vehicles if v["key"] == key and not v.get("released", False)
                                 and v["distance"] >= v["stop_distance"] - 1.0), None)
@@ -177,6 +179,13 @@ class TrafficScene(QWidget):
                 if walker is not None:
                     walker["released"] = True
             self.event_cursor += 1
+
+    @staticmethod
+    def _vehicle_type_for_index(index):
+        # A varied but repeatable vehicle mix for the current aggregate-demand model.
+        mix = ("car", "car", "car", "bus", "truck", "car", "articulated_bus",
+               "car", "lorry", "dump_truck", "car", "truck")
+        return mix[index % len(mix)]
 
     def _stage(self):
         if not self.phases:
@@ -240,7 +249,9 @@ class TrafficScene(QWidget):
                         self.vehicles.append({"key": key, "path": path, "distance": 0.0,
                                               "length": length, "base_stop_distance": stop_distance,
                                               "stop_distance": stop_distance,
-                                              "speed": 46.0, "turn": demand.turn, "released": False})
+                                              "speed": 46.0, "turn": demand.turn,
+                                              "vehicle_type": self._vehicle_type_for_index(len(self.vehicles)),
+                                              "released": False})
                         self.spawn_clock[key] = 0.0
         for pedestrian in self.pedestrians:
             key = pedestrian.movement_id
@@ -491,30 +502,74 @@ class TrafficScene(QWidget):
                     self._draw_signal_head(p, left - 12, pos.y(), state, horizontal=True)
                 else:
                     self._draw_signal_head(p, right + 12, pos.y(), state, horizontal=True)
-        # Animate vehicles along complete Bézier paths, including the exit beyond the far curb.
+        # Distinct top-down vehicle silhouettes; sizes are schematic, not to scale.
         for vehicle in self.vehicles:
             pt = self._point_at(vehicle)
             p.save()
             p.translate(pt)
-            p.setPen(QPen(QColor("#082f49"), 1))
-            p.setBrush(QColor("#38bdf8"))
-            if vehicle["key"].startswith(("Север:", "Юг:")):
-                p.drawRoundedRect(-5, -10, 10, 20, 3, 3)
-                p.setBrush(QColor("#bae6fd"))
-                p.drawRect(-3, -6, 6, 5)
+            horizontal = vehicle["key"].startswith(("Восток:", "Запад:"))
+            if horizontal:
+                p.rotate(0)
             else:
-                p.drawRoundedRect(-10, -5, 20, 10, 3, 3)
-                p.setBrush(QColor("#bae6fd"))
-                p.drawRect(-6, -3, 5, 6)
+                p.rotate(90)
+            kind = vehicle.get("vehicle_type", "car")
+            colors = {
+                "car": QColor("#38bdf8"), "bus": QColor("#f59e0b"),
+                "articulated_bus": QColor("#fb923c"), "truck": QColor("#a78bfa"),
+                "lorry": QColor("#e879f9"), "dump_truck": QColor("#f97316")
+            }
+            body = colors.get(kind, colors["car"])
+            p.setPen(QPen(QColor("#102033"), 1))
+            p.setBrush(body)
+            if kind == "car":
+                p.drawRoundedRect(-9, -4, 18, 8, 3, 3)
+                p.setBrush(QColor("#dbeafe")); p.drawRoundedRect(-4, -3, 7, 6, 2, 2)
+            elif kind == "bus":
+                p.drawRoundedRect(-14, -5, 28, 10, 2, 2)
+                p.setBrush(QColor("#dbeafe"))
+                for x in (-9, -3, 3, 9): p.drawRect(x, -3, 3, 3)
+                p.setBrush(QColor("#334155")); p.drawRect(9, -3, 3, 6)
+            elif kind == "articulated_bus":
+                p.drawRoundedRect(-20, -5, 40, 10, 2, 2)
+                p.setBrush(QColor("#dbeafe"))
+                for x in (-15, -9, -3, 5, 11): p.drawRect(x, -3, 4, 3)
+                p.setBrush(QColor("#475569")); p.drawRect(1, -5, 3, 10)
+                p.setPen(QPen(QColor("#102033"), 1)); p.drawLine(2, -4, 2, 4)
+            elif kind == "truck":
+                p.drawRoundedRect(-13, -5, 13, 10, 2, 2)
+                p.setBrush(QColor("#e2e8f0")); p.drawRect(0, -4, 13, 8)
+                p.setBrush(QColor("#bae6fd")); p.drawRect(-10, -3, 4, 3)
+            elif kind == "lorry":
+                p.drawRoundedRect(-17, -5, 10, 10, 2, 2)
+                p.setBrush(QColor("#e5e7eb")); p.drawRect(-7, -4, 23, 8)
+                p.setBrush(QColor("#bae6fd")); p.drawRect(-15, -3, 4, 3)
+                p.setBrush(QColor("#334155"))
+                for x in (-13, -3, 7, 13): p.drawEllipse(x, 4, 3, 3)
+            else:  # dump truck / tipper
+                p.drawRoundedRect(-13, -5, 13, 10, 2, 2)
+                p.setBrush(QColor("#fbbf24")); p.drawPolygon([QPointF(0,-4), QPointF(13,-3), QPointF(16,4), QPointF(0,4)])
+                p.setBrush(QColor("#bae6fd")); p.drawRect(-10, -3, 4, 3)
             p.restore()
-        # Pedestrians move along the whole zebra crossing, from one curb to the other.
+        # Three small pedestrian silhouettes with different clothing/accessory accents.
         for walker in self.walkers:
             pt = self._point_at(walker)
-            p.setPen(QPen(QColor("#78350f"), 1))
-            p.setBrush(QColor("#fde68a"))
-            p.drawEllipse(int(pt.x() - 3), int(pt.y() - 3), 6, 6)
-            p.setPen(QPen(QColor("#fde68a"), 2))
-            p.drawLine(int(pt.x()), int(pt.y() + 3), int(pt.x()), int(pt.y() + 8))
+            style = walker.get("style", 0)
+            p.save()
+            p.translate(pt)
+            p.setPen(QPen(QColor("#273449"), 1))
+            p.setBrush((QColor("#fcd34d"), QColor("#fda4af"), QColor("#86efac"))[style % 3])
+            p.drawEllipse(-3, -5, 6, 6)
+            p.setPen(QPen(QColor("#334155"), 2))
+            p.drawLine(0, 1, 0, 6)
+            p.drawLine(0, 3, -3, 5)
+            p.drawLine(0, 3, 3, 5)
+            p.drawLine(0, 6, -2, 9)
+            p.drawLine(0, 6, 2, 9)
+            if style == 1:
+                p.setPen(QPen(QColor("#334155"), 1)); p.drawLine(4, 2, 4, 8)
+            elif style == 2:
+                p.setPen(QPen(QColor("#ffffff"), 2)); p.drawLine(-1, 2, 1, 4)
+            p.restore()
         # Small crossing signal indicators are near each zebra crossing.
         for pedestrian in self.pedestrians:
             state = self._movement_state(pedestrian.movement_id, stage, active)
