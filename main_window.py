@@ -9,6 +9,7 @@ from app.signals.plan import Phase, SignalPlan
 from app.simulation.engine import SimulationConfig, run_simulation
 from app.simulation.detailed import MovementDemand, PedestrianDemand, simulate_detailed
 from app.editor.traffic_scene import TrafficScene
+from app.editor.movement_dialogs import LaneArrowDialog, PhaseMovementDialog
 from app.integrations.dgis import DGisClient, DGisError
 from app.settings import load_settings, save_settings
 from app.integrations.road_network import fetch_osm_roads, load_geojson, save_geojson, RoadNetworkError
@@ -36,6 +37,7 @@ class MainWindow(QMainWindow):
         self.settings = load_settings()
         self.road_network = None
         self.plan = SignalPlan.default()
+        self.lane_turns = {}
         tabs = QTabWidget()
         tabs.addTab(self._build_map_tab(), "2ГИС / импорт")
         tabs.addTab(self._build_scheme_tab(), "Схема")
@@ -181,12 +183,21 @@ class MainWindow(QMainWindow):
         intro.setWordWrap(True); layout.addWidget(intro)
         controls = QGroupBox("Полосы по направлениям"); form = QFormLayout(controls)
         self.lane_spins = {}
+        self.lane_turns = {}
         for approach in IntersectionView.APPROACHES:
             spin = QSpinBox(); spin.setRange(1, 8); spin.setValue(2); spin.setSuffix(" полос(ы)")
-            spin.valueChanged.connect(lambda value, name=approach: self.scheme.set_lane_count(name, value))
+            spin.valueChanged.connect(lambda value, name=approach: self._lane_count_changed(name, value))
             self.lane_spins[approach] = spin
+            for lane in range(1, spin.value() + 1):
+                self.lane_turns[(approach, lane)] = ("Прямо", "Налево", "Направо")
             form.addRow(approach, spin)
         layout.addWidget(controls)
+        arrow_row = QHBoxLayout()
+        arrows = QPushButton("Настроить стрелки по каждой полосе…")
+        arrows.clicked.connect(self._edit_lane_arrows)
+        arrow_row.addWidget(arrows)
+        arrow_row.addStretch()
+        layout.addLayout(arrow_row)
         self.scheme = IntersectionView(); layout.addWidget(self.scheme, 1)
         buttons = QHBoxLayout()
         save = QPushButton("Сохранить схему…"); save.clicked.connect(self._save_intersection); buttons.addWidget(save)
@@ -194,12 +205,54 @@ class MainWindow(QMainWindow):
         layout.addLayout(buttons)
         return w
 
+    def _lane_count_changed(self, approach, count):
+        if hasattr(self, "scheme"):
+            self.scheme.set_lane_count(approach, count)
+        for key in list(self.lane_turns):
+            if key[0] == approach and key[1] > count:
+                del self.lane_turns[key]
+        for lane in range(1, count + 1):
+            self.lane_turns.setdefault((approach, lane), ("Прямо", "Налево", "Направо"))
+        if hasattr(self, "movement_table"):
+            self._refresh_movement_rows()
+
+    def _edit_lane_arrows(self):
+        counts = {name: spin.value() for name, spin in self.lane_spins.items()}
+        dialog = LaneArrowDialog(counts, self.lane_turns, self)
+        if dialog.exec():
+            self.lane_turns = dialog.values()
+            if hasattr(self, "movement_table"):
+                self._refresh_movement_rows()
+            self.statusBar().showMessage("Разрешённые манёвры по полосам обновлены.", 5000)
+
+    def _edit_phase_movements(self):
+        row = self.phase_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Выберите фазу", "Выберите строку фазы, которой назначаются движения.")
+            return
+        try:
+            phases = self._read_phase_table()
+            movements, pedestrians = self._read_detailed_demands()
+        except (ValueError, AttributeError) as exc:
+            QMessageBox.warning(self, "Не удалось открыть назначения", str(exc))
+            return
+        selected = set(phases[row].movements)
+        all_ids = [m.movement_id for m in movements] + [p.movement_id for p in pedestrians]
+        for token in list(selected):
+            if token.endswith(":*"):
+                selected.update(key for key in all_ids if key.startswith(token[:-1]))
+                selected.discard(token)
+        dialog = PhaseMovementDialog(movements, pedestrians, selected, phases[row].name, self)
+        if dialog.exec():
+            self.phase_table.item(row, 6).setText(", ".join(dialog.selected_ids()))
+            self._apply_phases()
+
     def _build_signals_tab(self):
         w = QWidget(); layout = QVBoxLayout(w)
         note = QLabel("Редактируйте любое количество фаз. Время красного и зелёного мигающего включено в расчётную длину цикла. Это редактор плана, а не проверка конфликтов сигналов по ГОСТ.")
         note.setWordWrap(True); layout.addWidget(note)
         self.phase_table = QTableWidget(0, 7)
-        self.phase_table.setHorizontalHeaderLabels(["Название фазы", "Зелёный, с", "Зелёный мигающий, с", "Жёлтый, с", "Красный, с", "Межфазный, с", "Движения / переходы (через запятую)"])
+        self.phase_table.setHorizontalHeaderLabels(["Название фазы", "Зелёный, с", "Зелёный мигающий, с", "Жёлтый, с", "Красный, с", "Межфазный, с", "Назначенные движения (список)"])
         self.phase_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.phase_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.phase_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -207,6 +260,7 @@ class MainWindow(QMainWindow):
         buttons = QHBoxLayout()
         add = QPushButton("Добавить фазу"); add.clicked.connect(self._add_phase); buttons.addWidget(add)
         remove = QPushButton("Удалить выбранную фазу"); remove.clicked.connect(self._remove_phase); buttons.addWidget(remove)
+        assign = QPushButton("Назначить движения выбранной фазе…"); assign.clicked.connect(self._edit_phase_movements); buttons.addWidget(assign)
         apply = QPushButton("Проверить и применить план"); apply.clicked.connect(self._apply_phases); buttons.addWidget(apply)
         save = QPushButton("Сохранить план…"); save.clicked.connect(self._save_plan); buttons.addWidget(save)
         load = QPushButton("Загрузить план…"); load.clicked.connect(self._load_plan); buttons.addWidget(load)
@@ -428,7 +482,7 @@ class MainWindow(QMainWindow):
         for approach in IntersectionView.APPROACHES:
             count = self.lane_spins[approach].value()
             for lane in range(1, count + 1):
-                for turn in turns:
+                for turn in self.lane_turns.get((approach, lane), turns):
                     rows.append((approach, lane, turn, previous.get((approach, lane, turn), 180)))
         self.movement_table.setRowCount(len(rows))
         for row, values in enumerate(rows):
@@ -475,8 +529,10 @@ class MainWindow(QMainWindow):
         except (ValueError, ArithmeticError) as exc:
             QMessageBox.warning(self, "Ошибка детального сценария", str(exc))
             return
-        self.traffic_scene.configure(movements and self.plan.phases or self.plan.phases,
-                                     movements, pedestrians, self.plan.cycle_seconds)
+        self.traffic_scene.configure(
+            self.plan.phases, movements, pedestrians, self.plan.cycle_seconds,
+            {name: spin.value() for name, spin in self.lane_spins.items()}, self.lane_turns
+        )
         self.detailed_results.setPlainText(result.report())
 
     def _build_results_tab(self):
