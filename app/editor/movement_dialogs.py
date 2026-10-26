@@ -53,7 +53,9 @@ class LaneArrowDialog(QDialog):
                 self.table.setItem(row, 1, QTableWidgetItem(str(lane)))
                 combo = QComboBox()
                 combo.addItems(TURN_OPTIONS)
-                combo.setCurrentText(current.get((approach, lane), "Прямо, налево, направо"))
+                configured = current.get((approach, lane), ("Прямо", "Налево", "Направо"))
+                option = next((name for name, turns in TURN_GROUPS.items() if tuple(configured) == turns), "Прямо, налево, направо")
+                combo.setCurrentText(option)
                 self.table.setCellWidget(row, 2, combo)
                 self.rows.append((approach, lane, combo))
                 row += 1
