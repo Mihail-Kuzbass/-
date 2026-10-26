@@ -107,7 +107,8 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
     pcredits = {key: 0.0 for key in pqueues}
     movement_map = {m.movement_id: m for m in movements}
     pedestrian_map = {p.movement_id: p for p in pedestrians}
-    for t in range(duration_seconds):        for key, demand in movement_map.items():
+    for t in range(duration_seconds):
+        for key, demand in movement_map.items():
             if rng.random() < demand.vehicles_per_hour / 3600.0:
                 queues[key] += 1
                 arrivals += 1
