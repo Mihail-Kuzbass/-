@@ -51,8 +51,8 @@ class SignalPlan:
     @classmethod
     def default(cls):
         return cls([
-            Phase("Север—Юг", 35, 3, 2, 3, 0),
-            Phase("Восток—Запад", 30, 3, 2, 3, 0),
+            Phase("Север—Юг", 35, 3, 2, 3, 0, ["Север:*", "Юг:*"]),
+            Phase("Восток—Запад", 30, 3, 2, 3, 0, ["Восток:*", "Запад:*"]),
         ])
 
     @property
