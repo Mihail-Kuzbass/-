@@ -229,7 +229,7 @@ class TrafficScene(QWidget):
                 movement_map[key].approach, movement_map[key].turn, self.road_signs
             )
         }
-        return resolve_phase_movements(active, self.movements, self.pedestrians)
+        return resolve_phase_movements(active, self.movements, self.pedestrians, signs=self.road_signs)
 
     @staticmethod
     def _movement_state(movement_id, stage, active):
