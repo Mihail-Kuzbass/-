@@ -208,14 +208,14 @@ class MainWindow(QMainWindow):
         return w
 
     def _lane_count_changed(self, approach, count):
-        if hasattr(self, "scheme"):
-            self.scheme.set_lane_count(approach, count)
-            self.scheme.set_lane_turns(self.lane_turns)
         for key in list(self.lane_turns):
             if key[0] == approach and key[1] > count:
                 del self.lane_turns[key]
         for lane in range(1, count + 1):
             self.lane_turns.setdefault((approach, lane), ("Прямо", "Налево", "Направо"))
+        if hasattr(self, "scheme"):
+            self.scheme.set_lane_count(approach, count)
+            self.scheme.set_lane_turns(self.lane_turns)
         if hasattr(self, "movement_table"):
             self._refresh_movement_rows()
 
