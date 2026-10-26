@@ -151,7 +151,9 @@ class TrafficScene(QWidget):
                     path, base_stop_distance = self._vehicle_path(demand.approach, demand.lane, demand.turn)
                     # Keep vehicles in a real queue: each follower starts and stops
                     # one vehicle length behind the preceding car in the same movement.
-                    queued = sum(1 for v in self.vehicles if v["key"] == key and v["distance"] < v["length"])
+                    queued = sum(1 for v in self.vehicles if v["key"] == key
+                                  and v["distance"] < v["length"]
+                                  and (not v.get("released", False) or v["distance"] <= v["stop_distance"]))
                     queue_offset = 24.0 * queued
                     self.vehicles.append({"key": key, "path": path, "distance": -queue_offset,
                                           "length": path.length(), "base_stop_distance": base_stop_distance,
