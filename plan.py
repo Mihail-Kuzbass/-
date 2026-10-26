@@ -1,5 +1,5 @@
 """Traffic signal phase plan and JSON persistence."""
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 import json
 from pathlib import Path
 
@@ -12,6 +12,7 @@ class Phase:
     intergreen_seconds: int
     flashing_green_seconds: int = 0
     red_seconds: int = 0
+    movements: list = field(default_factory=list)
 
     @property
     def duration_seconds(self):
@@ -30,6 +31,9 @@ class SignalPlan:
         if len(self.phases) > 32:
             raise ValueError("Допускается не более 32 фаз в одном плане.")
         for i, phase in enumerate(self.phases, 1):
+            if not isinstance(phase.movements, list) or any(not isinstance(x, str) or not x.strip() for x in phase.movements):
+                raise ValueError(f"Фаза {i}: назначения движений должны быть списком непустых идентификаторов.")
+            phase.movements = list(dict.fromkeys(x.strip() for x in phase.movements))
             if not phase.name.strip():
                 raise ValueError(f"Фаза {i}: укажите название.")
             for label, value, minimum in (
@@ -77,6 +81,7 @@ class SignalPlan:
                 else:
                     item.setdefault("flashing_green_seconds", 0)
                     item.setdefault("red_seconds", 0)
+                    item.setdefault("movements", [])
                 phases.append(Phase(**item))
             return cls(phases)
         except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
