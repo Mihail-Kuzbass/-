@@ -78,6 +78,13 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
     cycle = sum(p.duration_seconds for p in phases)
     if cycle <= 0:
         raise ValueError("Длина цикла должна быть положительной.")
+    # Legacy plans with no explicit assignments retain a useful, predictable two-axis default.
+    if not any(p.movements for p in phases):
+        for index, phase in enumerate(phases):
+            if index == 0:
+                phase.movements = [m.movement_id for m in movements if m.approach in ("Север", "Юг")]
+            elif index == 1:
+                phase.movements = [m.movement_id for m in movements if m.approach in ("Восток", "Запад")]
     phases_by_start = []
     cursor = 0
     for phase in phases:
@@ -92,15 +99,7 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
     pcredits = {key: 0.0 for key in pqueues}
     movement_map = {m.movement_id: m for m in movements}
     pedestrian_map = {p.movement_id: p for p in pedestrians}
-    # Legacy plans with no explicit assignments retain a useful, predictable two-axis default.
-    if not any(p.movements for p in phases):
-        for index, phase in enumerate(phases):
-            if index == 0:
-                phase.movements = [m.movement_id for m in movements if m.approach in ("Север", "Юг")]
-            elif index == 1:
-                phase.movements = [m.movement_id for m in movements if m.approach in ("Восток", "Запад")]
-    for t in range(duration_seconds):
-        for key, demand in movement_map.items():
+    for t in range(duration_seconds):        for key, demand in movement_map.items():
             if rng.random() < demand.vehicles_per_hour / 3600.0:
                 queues[key] += 1
                 arrivals += 1
