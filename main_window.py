@@ -7,6 +7,8 @@ from PySide6.QtWidgets import (
 from app.editor.intersection_view import IntersectionView
 from app.signals.plan import Phase, SignalPlan
 from app.simulation.engine import SimulationConfig, run_simulation
+from app.simulation.detailed import MovementDemand, PedestrianDemand, simulate_detailed
+from app.editor.traffic_scene import TrafficScene
 from app.integrations.dgis import DGisClient, DGisError
 from app.settings import load_settings, save_settings
 from app.integrations.road_network import fetch_osm_roads, load_geojson, save_geojson, RoadNetworkError
@@ -24,6 +26,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._build_scheme_tab(), "Схема")
         tabs.addTab(self._build_signals_tab(), "Светофорная программа")
         tabs.addTab(self._build_demand_tab(), "Транспортный поток")
+        tabs.addTab(self._build_detailed_tab(), "Интерактивная модель")
         tabs.addTab(self._build_results_tab(), "Результаты")
         self.tabs = tabs
         self.setCentralWidget(tabs)
@@ -180,8 +183,8 @@ class MainWindow(QMainWindow):
         w = QWidget(); layout = QVBoxLayout(w)
         note = QLabel("Редактируйте любое количество фаз. Время красного и зелёного мигающего включено в расчётную длину цикла. Это редактор плана, а не проверка конфликтов сигналов по ГОСТ.")
         note.setWordWrap(True); layout.addWidget(note)
-        self.phase_table = QTableWidget(0, 6)
-        self.phase_table.setHorizontalHeaderLabels(["Название фазы", "Зелёный, с", "Зелёный мигающий, с", "Жёлтый, с", "Красный, с", "Межфазный, с"])
+        self.phase_table = QTableWidget(0, 7)
+        self.phase_table.setHorizontalHeaderLabels(["Название фазы", "Зелёный, с", "Зелёный мигающий, с", "Жёлтый, с", "Красный, с", "Межфазный, с", "Движения / переходы (через запятую)"])
         self.phase_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.phase_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.phase_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -202,7 +205,8 @@ class MainWindow(QMainWindow):
         self.phase_table.setRowCount(len(phases))
         for r, phase in enumerate(phases):
             values = [phase.name, phase.green_seconds, phase.flashing_green_seconds,
-                      phase.yellow_seconds, phase.red_seconds, phase.intergreen_seconds]
+                      phase.yellow_seconds, phase.red_seconds, phase.intergreen_seconds,
+                      ", ".join(phase.movements)]
             for c, value in enumerate(values):
                 self.phase_table.setItem(r, c, QTableWidgetItem(str(value)))
 
@@ -211,7 +215,7 @@ class MainWindow(QMainWindow):
         if row >= 32:
             QMessageBox.information(self, "Лимит фаз", "Можно добавить не более 32 фаз."); return
         self.phase_table.insertRow(row)
-        for col, value in enumerate([f"Фаза {row + 1}", 20, 3, 3, 0, 2]):
+        for col, value in enumerate([f"Фаза {row + 1}", 20, 3, 3, 0, 2, ""]):
             self.phase_table.setItem(row, col, QTableWidgetItem(str(value)))
         self.phase_table.selectRow(row)
 
@@ -233,12 +237,13 @@ class MainWindow(QMainWindow):
     def _read_phase_table(self):
         phases = []
         for r in range(self.phase_table.rowCount()):
-            cells = [self.phase_table.item(r, c) for c in range(6)]
+            cells = [self.phase_table.item(r, c) for c in range(7)]
             if any(cell is None for cell in cells):
                 raise ValueError(f"Фаза {r + 1}: заполните все поля.")
             try:
+                movements = [token.strip() for token in cells[6].text().split(",") if token.strip()]
                 phases.append(Phase(cells[0].text().strip(), int(cells[1].text()), int(cells[3].text()),
-                                    int(cells[5].text()), int(cells[2].text()), int(cells[4].text())))
+                                    int(cells[5].text()), int(cells[2].text()), int(cells[4].text()), movements))
             except ValueError as exc:
                 raise ValueError(f"Фаза {r + 1}: времена должны быть целыми числами.") from exc
         return phases
@@ -315,6 +320,149 @@ class MainWindow(QMainWindow):
         note.setWordWrap(True); outer.addWidget(note)
         run = QPushButton("Запустить моделирование"); run.clicked.connect(self._run); outer.addWidget(run); outer.addStretch()
         return w
+
+    def _build_detailed_tab(self):
+        w = QWidget()
+        outer = QVBoxLayout(w)
+        intro = QLabel(
+            "Интерактивная модель: задайте интенсивность отдельно для каждой полосы и манёвра, "
+            "а также для каждого пешеходного перехода. Назначения фаз редактируются на вкладке "
+            "«Светофорная программа»: используйте идентификаторы вроде Север:* или Пешеходы:Север. "
+            "Звёздочка назначает все полосы соответствующего подхода. Схема анимирована и условна."
+        )
+        intro.setWordWrap(True)
+        outer.addWidget(intro)
+        split = QHBoxLayout()
+        tables = QVBoxLayout()
+        move_box = QGroupBox("Транспортный спрос — авт./ч")
+        move_layout = QVBoxLayout(move_box)
+        self.movement_table = QTableWidget(0, 4)
+        self.movement_table.setHorizontalHeaderLabels(["Подход", "Полоса", "Манёвр", "Авт./ч"])
+        self.movement_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        move_layout.addWidget(self.movement_table)
+        refresh = QPushButton("Сформировать строки по числу полос")
+        refresh.clicked.connect(self._refresh_movement_rows)
+        move_layout.addWidget(refresh)
+        tables.addWidget(move_box, 3)
+        ped_box = QGroupBox("Пешеходные переходы — чел./ч")
+        ped_layout = QVBoxLayout(ped_box)
+        self.pedestrian_table = QTableWidget(4, 2)
+        self.pedestrian_table.setHorizontalHeaderLabels(["Переход", "Чел./ч"])
+        self.pedestrian_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        for row, name in enumerate(("Север", "Восток", "Юг", "Запад")):
+            self.pedestrian_table.setItem(row, 0, QTableWidgetItem(name))
+            self.pedestrian_table.setItem(row, 1, QTableWidgetItem("80"))
+        ped_layout.addWidget(self.pedestrian_table)
+        tables.addWidget(ped_box, 1)
+        split.addLayout(tables, 3)
+        self.traffic_scene = TrafficScene()
+        split.addWidget(self.traffic_scene, 2)
+        outer.addLayout(split, 1)
+        controls = QHBoxLayout()
+        self.detail_duration = QSpinBox()
+        self.detail_duration.setRange(60, 7200)
+        self.detail_duration.setValue(1800)
+        self.detail_duration.setSuffix(" с")
+        self.detail_saturation = QSpinBox()
+        self.detail_saturation.setRange(300, 3600)
+        self.detail_saturation.setValue(1800)
+        self.detail_saturation.setSuffix(" авт./ч/полосу")
+        self.detail_seed = QSpinBox()
+        self.detail_seed.setRange(1, 999999)
+        self.detail_seed.setValue(42)
+        controls.addWidget(QLabel("Длительность:"))
+        controls.addWidget(self.detail_duration)
+        controls.addWidget(QLabel("Насыщенный поток:"))
+        controls.addWidget(self.detail_saturation)
+        controls.addWidget(QLabel("Seed:"))
+        controls.addWidget(self.detail_seed)
+        run = QPushButton("Рассчитать сценарий")
+        run.clicked.connect(self._run_detailed)
+        controls.addWidget(run)
+        start = QPushButton("▶ Запуск анимации")
+        start.clicked.connect(self.traffic_scene.start)
+        controls.addWidget(start)
+        pause = QPushButton("Ⅱ Пауза")
+        pause.clicked.connect(self.traffic_scene.pause)
+        controls.addWidget(pause)
+        reset = QPushButton("↺ Сброс")
+        reset.clicked.connect(self.traffic_scene.reset)
+        controls.addWidget(reset)
+        outer.addLayout(controls)
+        self.detailed_results = QTextEdit()
+        self.detailed_results.setReadOnly(True)
+        self.detailed_results.setMaximumHeight(130)
+        self.detailed_results.setPlaceholderText("Здесь появится отчёт по транспорту и пешеходам.")
+        outer.addWidget(self.detailed_results)
+        self._refresh_movement_rows()
+        return w
+
+    def _refresh_movement_rows(self):
+        previous = {}
+        if hasattr(self, "movement_table"):
+            for row in range(self.movement_table.rowCount()):
+                try:
+                    key = (self.movement_table.item(row, 0).text(),
+                           int(self.movement_table.item(row, 1).text()),
+                           self.movement_table.item(row, 2).text())
+                    previous[key] = int(self.movement_table.item(row, 3).text())
+                except (AttributeError, ValueError):
+                    pass
+        rows = []
+        turns = ("Прямо", "Налево", "Направо")
+        for approach in IntersectionView.APPROACHES:
+            count = self.lane_spins[approach].value()
+            for lane in range(1, count + 1):
+                for turn in turns:
+                    rows.append((approach, lane, turn, previous.get((approach, lane, turn), 180)))
+        self.movement_table.setRowCount(len(rows))
+        for row, values in enumerate(rows):
+            for col, value in enumerate(values):
+                self.movement_table.setItem(row, col, QTableWidgetItem(str(value)))
+
+    def _read_detailed_demands(self):
+        movements = []
+        for row in range(self.movement_table.rowCount()):
+            try:
+                approach = self.movement_table.item(row, 0).text().strip()
+                lane = int(self.movement_table.item(row, 1).text())
+                turn = self.movement_table.item(row, 2).text().strip()
+                demand = int(self.movement_table.item(row, 3).text())
+            except (AttributeError, ValueError) as exc:
+                raise ValueError(f"Транспортная строка {row + 1}: проверьте полосу и интенсивность.") from exc
+            if approach not in IntersectionView.APPROACHES or turn not in ("Прямо", "Налево", "Направо"):
+                raise ValueError(f"Транспортная строка {row + 1}: неизвестный подход или манёвр.")
+            if lane < 1 or demand < 0:
+                raise ValueError(f"Транспортная строка {row + 1}: полоса должна быть положительной, интенсивность — неотрицательной.")
+            movements.append(MovementDemand(approach, lane, turn, demand))
+        pedestrians = []
+        for row in range(self.pedestrian_table.rowCount()):
+            try:
+                crossing = self.pedestrian_table.item(row, 0).text().strip()
+                demand = int(self.pedestrian_table.item(row, 1).text())
+            except (AttributeError, ValueError) as exc:
+                raise ValueError(f"Пешеходная строка {row + 1}: введите целую интенсивность.") from exc
+            if crossing not in IntersectionView.APPROACHES or demand < 0:
+                raise ValueError(f"Пешеходная строка {row + 1}: проверьте название перехода и интенсивность.")
+            pedestrians.append(PedestrianDemand(crossing, demand))
+        return movements, pedestrians
+
+    def _run_detailed(self):
+        if not self._apply_phases():
+            return
+        try:
+            movements, pedestrians = self._read_detailed_demands()
+            result = simulate_detailed(
+                movements, pedestrians, self.plan.phases,
+                self.detail_duration.value(), self.detail_saturation.value(),
+                self.detail_seed.value()
+            )
+        except (ValueError, ArithmeticError) as exc:
+            QMessageBox.warning(self, "Ошибка детального сценария", str(exc))
+            return
+        self.traffic_scene.configure(movements and self.plan.phases or self.plan.phases,
+                                     movements, pedestrians, self.plan.cycle_seconds)
+        self.detailed_results.setPlainText(result.report())
 
     def _build_results_tab(self):
         w = QWidget(); l = QVBoxLayout(w); self.results_text = QTextEdit(); self.results_text.setReadOnly(True)
