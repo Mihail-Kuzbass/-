@@ -189,25 +189,26 @@ class TrafficScene(QWidget):
             count = max(1, self.lane_counts.get(approach, 1))
             for lane in range(1, count+1):
                 turns = self.lane_turns.get((approach, lane), ("Прямо", "Налево", "Направо"))
-                for turn in turns:
+                for turn_index, turn in enumerate(turns):
                     key = f"{approach}:{lane}:{turn}"
                     state = self._movement_state(key, stage, active)
                     pos = (lane - 0.5) / count
+                    turn_offset = (turn_index - (len(turns)-1)/2) * 5
                     if approach == "Север":
-                        x, stop_y = left + pos*road_w, top-10
-                        car_x, car_y = x, (top-38 if state == "red" else (top-55-(self.tick%16)*4))
+                        x, stop_y = left + pos*road_w + turn_offset, top-10
+                        car_x, car_y = x, (top-38 if state in ("red", "yellow", "intergreen") else (top-55+(self.tick%16)*4))
                         arrow_x, arrow_y = x, top-65
                     elif approach == "Юг":
-                        x, stop_y = left + pos*road_w, bottom+10
-                        car_x, car_y = x, (bottom+38 if state == "red" else (bottom+55+(self.tick%16)*4))
+                        x, stop_y = left + pos*road_w + turn_offset, bottom+10
+                        car_x, car_y = x, (bottom+38 if state in ("red", "yellow", "intergreen") else (bottom+55-(self.tick%16)*4))
                         arrow_x, arrow_y = x, bottom+65
                     elif approach == "Запад":
-                        y, stop_x = top + pos*road_w, left-10
-                        car_x, car_y = (left-38 if state == "red" else (left-55-(self.tick%16)*4)), y
+                        y, stop_x = top + pos*road_w + turn_offset, left-10
+                        car_x, car_y = (left-38 if state in ("red", "yellow", "intergreen") else (left-55+(self.tick%16)*4)), y
                         arrow_x, arrow_y = left-65, y
                     else:
-                        y, stop_x = top + pos*road_w, right+10
-                        car_x, car_y = (right+38 if state == "red" else (right+55+(self.tick%16)*4)), y
+                        y, stop_x = top + pos*road_w + turn_offset, right+10
+                        car_x, car_y = (right+38 if state in ("red", "yellow", "intergreen") else (right+55-(self.tick%16)*4)), y
                         arrow_x, arrow_y = right+65, y
                     # Small turn arrow label
                     p.setPen(QColor("#ffffff"))
