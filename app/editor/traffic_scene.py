@@ -173,7 +173,8 @@ class TrafficScene(QWidget):
                 if demand is not None:
                     path = self._pedestrian_path(demand.crossing)
                     self.walkers.append({"key": key, "path": path, "distance": 0.0,
-                                         "length": path.length(), "speed": 48.0, "released": False})
+                                         "length": path.length(), "speed": 48.0,
+                                         "style": self.event_cursor % 3, "released": False})
             elif event["kind"] == "pedestrian_served":
                 walker = next((v for v in self.walkers if v["key"] == key and not v.get("released", False)), None)
                 if walker is not None:
@@ -266,7 +267,8 @@ class TrafficScene(QWidget):
             if self.ped_spawn_clock[key] >= interval and not any(v["key"] == key and v["distance"] < 18 for v in self.walkers):
                 path = self._pedestrian_path(pedestrian.crossing)
                 self.walkers.append({"key": key, "path": path, "distance": 0.0,
-                                     "length": path.length(), "speed": 48.0})
+                                     "length": path.length(), "speed": 48.0,
+                                     "style": len(self.walkers) % 3, "released": True})
                 self.ped_spawn_clock[key] = 0.0
 
     def _layout(self):
