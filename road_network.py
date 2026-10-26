@@ -5,6 +5,8 @@ road topology through the Places API; use only data sources whose terms permit i
 """
 from __future__ import annotations
 import json
+import hashlib
+import time
 from pathlib import Path
 from typing import Any
 import requests
@@ -29,6 +31,23 @@ def fetch_osm_roads(south: float, west: float, north: float, east: float,
                     timeout: int = 45) -> dict[str, Any]:
     """Fetch tagged road ways as GeoJSON-compatible features from Overpass."""
     validate_bbox(south, west, north, east)
+    # Cache each requested area locally for 30 days to avoid repeated API waits.
+    cache_root = Path.home() / ".traffic_signal_studio" / "osm_cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    cache_key = hashlib.sha256(
+        ",".join(f"{value:.5f}" for value in (south, west, north, east)).encode("ascii")
+    ).hexdigest()[:24]
+    cache_file = cache_root / f"{cache_key}.geojson"
+    if cache_file.exists():
+        try:
+            if time.time() - cache_file.stat().st_mtime < 30 * 24 * 60 * 60:
+                cached = json.loads(cache_file.read_text(encoding="utf-8"))
+                if cached.get("type") == "FeatureCollection" and cached.get("features"):
+                    cached["cache_status"] = "hit"
+                    return cached
+        except (OSError, json.JSONDecodeError):
+            pass
+
     query = f'''[out:json][timeout:30];(way["highway"]({south},{west},{north},{east}););out geom;'''
     errors = []
     for endpoint in OVERPASS_ENDPOINTS:
@@ -49,8 +68,15 @@ def fetch_osm_roads(south: float, west: float, north: float, east: float,
                     "coordinates": [[p["lon"], p["lat"]] for p in geometry if "lon" in p and "lat" in p]}})
             if not features:
                 raise RoadNetworkError("В выбранной области дороги не найдены.")
-            return {"type": "FeatureCollection", "name": "TrafficSignalStudio OSM road import",
-                    "source": "OpenStreetMap via Overpass API", "features": features}
+            result = {"type": "FeatureCollection", "name": "TrafficSignalStudio OSM road import",
+                      "source": "OpenStreetMap via Overpass API", "features": features,
+                      "cache_status": "miss"}
+            try:
+                cache_file.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+            except OSError:
+                # A cache failure should not prevent a successful map import.
+                pass
+            return result
         except (requests.RequestException, ValueError, KeyError) as exc:
             errors.append(f"{endpoint}: {exc}")
     raise RoadNetworkError("Не удалось получить данные дорожной сети. " + " | ".join(errors))
