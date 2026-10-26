@@ -96,9 +96,6 @@ class TrafficScene(QWidget):
         self.spawn_clock.clear()
         self.ped_spawn_clock.clear()
         self.event_cursor = 0
-        self.sim_time = 0.0
-        self.phase_elapsed = 0.0
-        self.phase_index = 0
         self.update()
 
     def _advance(self):
@@ -141,9 +138,13 @@ class TrafficScene(QWidget):
             if event["kind"] == "vehicle_arrival":
                 demand = next((m for m in self.movements if m.movement_id == key), None)
                 if demand is not None:
-                    path, stop_distance = self._vehicle_path(demand.approach, demand.lane, demand.turn)
-                    self.vehicles.append({"key": key, "path": path, "distance": 0.0,
-                                          "length": path.length(), "stop_distance": stop_distance,
+                    path, base_stop_distance = self._vehicle_path(demand.approach, demand.lane, demand.turn)
+                    # Keep vehicles in a real queue: each follower starts and stops
+                    # one vehicle length behind the preceding car in the same movement.
+                    queued = sum(1 for v in self.vehicles if v["key"] == key and v["distance"] < v["length"])
+                    queue_offset = 24.0 * queued
+                    self.vehicles.append({"key": key, "path": path, "distance": -queue_offset,
+                                          "length": path.length(), "stop_distance": base_stop_distance - queue_offset,
                                           "speed": 46.0, "turn": demand.turn, "released": False})
             elif event["kind"] == "vehicle_served":
                 vehicle = next((v for v in self.vehicles if v["key"] == key and not v.get("released", False)
@@ -339,8 +340,15 @@ class TrafficScene(QWidget):
     def _point_at(self, item):
         path = item["path"]
         length = max(1.0, item["length"])
-        # QPainterPath percentage is a curve parameter, not a distance ratio.
-        percent = path.percentAtLength(min(length, max(0.0, item["distance"])))
+        distance = item["distance"]
+        # Negative distances place queued vehicles upstream of the visible path start.
+        if distance < 0:
+            start = path.pointAtPercent(0.0)
+            step = path.pointAtPercent(path.percentAtLength(min(1.0, length)))
+            dx, dy = step.x() - start.x(), step.y() - start.y()
+            norm = max(1.0, hypot(dx, dy))
+            return QPointF(start.x() + dx / norm * distance, start.y() + dy / norm * distance)
+        percent = path.percentAtLength(min(length, distance))
         return path.pointAtPercent(percent)
 
     @staticmethod
