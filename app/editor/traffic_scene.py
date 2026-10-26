@@ -7,8 +7,9 @@ microsimulation or a substitute for a surveyed intersection plan.
 from math import hypot
 from PySide6.QtCore import Qt, QTimer, QPointF
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPainterPath
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QWidget, QMenu
 from app.simulation.detailed import resolve_phase_movements
+from app.signs import SIGN_CATALOG, movement_allowed_by_signs
 
 
 class TrafficScene(QWidget):
@@ -37,6 +38,7 @@ class TrafficScene(QWidget):
         self.phases = []
         self.movements = []
         self.pedestrians = []
+        self.road_signs = []
         self.lane_counts = {name: 2 for name in self.APPROACHES}
         self.lane_turns = {}
         self.vehicles = []
@@ -55,11 +57,13 @@ class TrafficScene(QWidget):
         self.speed_multiplier = 2 if int(multiplier) >= 2 else 1
         self.update()
 
-    def configure(self, phases, movements, pedestrians, cycle_seconds, lane_counts=None, lane_turns=None, result=None):
+    def configure(self, phases, movements, pedestrians, cycle_seconds, lane_counts=None, lane_turns=None, result=None, signs=None):
         self.pause()
         self.phases = list(phases)
         self.movements = list(movements)
         self.pedestrians = list(pedestrians)
+        if signs is not None:
+            self.road_signs = [dict(sign) for sign in signs]
         if lane_counts:
             self.lane_counts = dict(lane_counts)
         if lane_turns is not None:
@@ -217,8 +221,14 @@ class TrafficScene(QWidget):
                 active.update(key for key in all_ids if key.startswith(token[:-1]))
             else:
                 active.add(token)
-        # Use the same conflict resolution as the numeric simulator so signal
-        # heads, movement arrows, and vehicle service events stay synchronized.
+        # Apply prohibitory/mandatory signs before resolving vehicle conflicts.
+        movement_map = {m.movement_id: m for m in self.movements}
+        active = {
+            key for key in active
+            if key not in movement_map or movement_allowed_by_signs(
+                movement_map[key].approach, movement_map[key].turn, self.road_signs
+            )
+        }
         return resolve_phase_movements(active, self.movements, self.pedestrians)
 
     @staticmethod
@@ -273,6 +283,39 @@ class TrafficScene(QWidget):
                                      "length": path.length(), "speed": 48.0,
                                      "style": len(self.walkers) % 3, "released": True})
                 self.ped_spawn_clock[key] = 0.0
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.RightButton:
+            return super().mousePressEvent(event)
+        g = self._layout()
+        x, y = event.position().x(), event.position().y()
+        if y < g["top"]:
+            approach = "Север"
+        elif y > g["bottom"]:
+            approach = "Юг"
+        elif x < g["left"]:
+            approach = "Запад"
+        elif x > g["right"]:
+            approach = "Восток"
+        else:
+            return
+        menu = QMenu(self)
+        remove = menu.addAction(f"Убрать знаки с подхода «{approach}»")
+        menu.addSeparator()
+        actions = {}
+        for code, (name, _group) in SIGN_CATALOG.items():
+            actions[menu.addAction(f"{code} — {name}")] = code
+        chosen = menu.exec(event.globalPosition().toPoint())
+        if chosen is None:
+            return
+        if chosen == remove:
+            self.road_signs = [sign for sign in self.road_signs if sign.get("approach") != approach]
+        elif chosen in actions:
+            code = actions[chosen]
+            self.road_signs = [sign for sign in self.road_signs
+                               if not (sign.get("approach") == approach and sign.get("code") == code)]
+            self.road_signs.append({"approach": approach, "code": code, "name": SIGN_CATALOG[code][0]})
+        self.update()
 
     def _layout(self):
         w, h = float(self.width()), float(self.height())
