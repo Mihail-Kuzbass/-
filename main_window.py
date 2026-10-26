@@ -320,7 +320,9 @@ class MainWindow(QMainWindow):
     def _apply_phases(self, show_error=True):
         try:
             self.plan = SignalPlan(self._read_phase_table())
-            self.phase_summary.setText(f"Фаз: {len(self.plan.phases)} · Расчётная длина цикла: {self.plan.cycle_seconds} с")
+            assigned_count = sum(len(phase.movements) for phase in self.plan.phases)
+            suffix = f"Назначений: {assigned_count}" if assigned_count else "ВНИМАНИЕ: движения не назначены — транспорт не получит зелёный"
+            self.phase_summary.setText(f"Фаз: {len(self.plan.phases)} · Цикл: {self.plan.cycle_seconds} с · {suffix}")
             if hasattr(self, "scheme"):
                 self.scheme.update()
             return True
