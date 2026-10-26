@@ -5,7 +5,7 @@ and only movements explicitly assigned to a phase receive green.
 """
 from dataclasses import dataclass
 import random
-from app.signs import movement_allowed_by_signs
+from app.signs import movement_allowed_by_signs, approach_priority
 
 
 @dataclass(frozen=True)
@@ -62,7 +62,7 @@ def vehicle_pedestrian_conflict(vehicle, pedestrian):
             movement_exit_side(vehicle) == pedestrian.crossing)
 
 
-def resolve_phase_movements(active_ids, movements, pedestrians):
+def resolve_phase_movements(active_ids, movements, pedestrians, signs=None):
     """Choose a deterministic non-conflicting subset so conflicts do not deadlock a phase."""
     active_ids = set(active_ids)
     vehicle_map = {m.movement_id: m for m in movements}
@@ -70,7 +70,9 @@ def resolve_phase_movements(active_ids, movements, pedestrians):
     approach_order = {"Север": 0, "Юг": 1, "Восток": 2, "Запад": 3}
     turn_order = {"Прямо": 0, "Направо": 1, "Налево": 2}
     candidates = [vehicle_map[key] for key in active_ids if key in vehicle_map]
-    candidates.sort(key=lambda m: (turn_order.get(m.turn, 3), approach_order.get(m.approach, 9), m.lane))
+    candidates.sort(key=lambda m: (approach_priority(m.approach, signs),
+                                   turn_order.get(m.turn, 3),
+                                   approach_order.get(m.approach, 9), m.lane))
     selected_vehicles = []
     selected_walkers = []
     for candidate in candidates:
@@ -206,7 +208,7 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
         conflicts = find_phase_conflicts(assigned, movements, pedestrians)
         if conflicts:
             phase_conflicts.append((phase.name, conflicts))
-        permitted = resolve_phase_movements(assigned, movements, pedestrians)
+        permitted = resolve_phase_movements(assigned, movements, pedestrians, signs=signs)
         phases_by_start.append((cursor, cursor + green, permitted))
         cursor += phase.duration_seconds
     queues = {m.movement_id: 0 for m in movements}
