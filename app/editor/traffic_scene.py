@@ -114,6 +114,16 @@ class TrafficScene(QWidget):
             stage, active = self._stage(), self._active_ids()
             self._spawn_eligible(stage, active, dt)
         stage, active = self._stage(), self._active_ids()
+        # Re-pack waiting cars as the queue discharges; a follower advances
+        # toward the stop line when the car ahead enters the junction.
+        by_movement = {}
+        for vehicle in self.vehicles:
+            by_movement.setdefault(vehicle["key"], []).append(vehicle)
+        for group in by_movement.values():
+            waiting = [v for v in group if (not v.get("released", False) or
+                       v["distance"] <= v["stop_distance"])]
+            for index, vehicle in enumerate(waiting):
+                vehicle["stop_distance"] = vehicle.get("base_stop_distance", vehicle["stop_distance"]) - 24.0 * index
         for vehicle in self.vehicles:
             # Cars approach even on red, stop at the stop line, and only enter
             # when the matching movement has a service/release event.
@@ -144,7 +154,8 @@ class TrafficScene(QWidget):
                     queued = sum(1 for v in self.vehicles if v["key"] == key and v["distance"] < v["length"])
                     queue_offset = 24.0 * queued
                     self.vehicles.append({"key": key, "path": path, "distance": -queue_offset,
-                                          "length": path.length(), "stop_distance": base_stop_distance - queue_offset,
+                                          "length": path.length(), "base_stop_distance": base_stop_distance,
+                                          "stop_distance": base_stop_distance - queue_offset,
                                           "speed": 46.0, "turn": demand.turn, "released": False})
             elif event["kind"] == "vehicle_served":
                 vehicle = next((v for v in self.vehicles if v["key"] == key and not v.get("released", False)
@@ -225,7 +236,8 @@ class TrafficScene(QWidget):
                     length = path.length()
                     if length > 0:
                         self.vehicles.append({"key": key, "path": path, "distance": 0.0,
-                                              "length": length, "stop_distance": stop_distance,
+                                              "length": length, "base_stop_distance": stop_distance,
+                                              "stop_distance": stop_distance,
                                               "speed": 46.0, "turn": demand.turn, "released": False})
                         self.spawn_clock[key] = 0.0
         for pedestrian in self.pedestrians:
