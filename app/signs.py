@@ -49,3 +49,15 @@ def movement_allowed_by_signs(approach, turn, signs):
         if allowed is not None and turn not in allowed:
             return False
     return True
+
+
+
+def approach_priority(approach, signs):
+    """Lower values are served first when the schematic conflict resolver arbitrates."""
+    codes = {sign.get("code") for sign in (signs or [])
+             if sign.get("approach") == approach}
+    if "2.1" in codes:
+        return 0
+    if codes.intersection({"2.4", "2.5"}):
+        return 2
+    return 1
