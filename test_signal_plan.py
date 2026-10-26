@@ -148,6 +148,13 @@ def test_right_turn_does_not_conflict_with_perpendicular_straight_vehicle():
     assert not vehicle_movements_conflict(right_turn, cross_straight)
 
 
+def test_right_turn_conflicts_with_perpendicular_left_turn():
+    from app.simulation.detailed import MovementDemand, vehicle_movements_conflict
+    right_turn = MovementDemand("Север", 1, "Направо", 600)
+    cross_left = MovementDemand("Восток", 1, "Налево", 600)
+    assert vehicle_movements_conflict(right_turn, cross_left)
+
+
 def test_mandatory_sign_restricts_vehicle_movement():
     from app.signs import movement_allowed_by_signs
     signs = [{"approach": "Север", "code": "4.1.2"}]
