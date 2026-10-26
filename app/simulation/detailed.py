@@ -29,6 +29,53 @@ class PedestrianDemand:
         return f"Пешеходы:{self.crossing}"
 
 
+_EXIT_SIDE = {
+    "Север": {"Прямо": "Юг", "Налево": "Восток", "Направо": "Запад"},
+    "Юг": {"Прямо": "Север", "Налево": "Запад", "Направо": "Восток"},
+    "Запад": {"Прямо": "Восток", "Налево": "Север", "Направо": "Юг"},
+    "Восток": {"Прямо": "Запад", "Налево": "Юг", "Направо": "Север"},
+}
+_OPPOSITE = {"Север": "Юг", "Юг": "Север", "Запад": "Восток", "Восток": "Запад"}
+
+
+def movement_exit_side(movement):
+    return _EXIT_SIDE.get(movement.approach, {}).get(movement.turn)
+
+
+def vehicle_movements_conflict(first, second):
+    """Conservative conflict rules for a schematic four-leg, right-hand-traffic junction."""
+    if first.approach == second.approach:
+        return False
+    if _OPPOSITE.get(first.approach) == second.approach:
+        return first.turn == "Налево" or second.turn == "Налево"
+    return True
+
+
+def vehicle_pedestrian_conflict(vehicle, pedestrian):
+    return (vehicle.approach == pedestrian.crossing or
+            movement_exit_side(vehicle) == pedestrian.crossing)
+
+
+def find_phase_conflicts(active_ids, movements, pedestrians):
+    """Return movement pairs that must not receive service simultaneously."""
+    active_ids = set(active_ids)
+    vehicles = [m for m in movements if m.movement_id in active_ids]
+    walkers = [p for p in pedestrians if p.movement_id in active_ids]
+    conflicts = []
+    for i, first in enumerate(vehicles):
+        for second in vehicles[i + 1:]:
+            if vehicle_movements_conflict(first, second):
+                conflicts.append((first.movement_id, second.movement_id))
+        for pedestrian in walkers:
+            if vehicle_pedestrian_conflict(first, pedestrian):
+                conflicts.append((first.movement_id, pedestrian.movement_id))
+    for i, first in enumerate(walkers):
+        for second in walkers[i + 1:]:
+            if first.crossing != second.crossing:
+                conflicts.append((first.movement_id, second.movement_id))
+    return conflicts
+
+
 @dataclass
 class DetailedResult:
     duration_seconds: int
@@ -42,23 +89,41 @@ class DetailedResult:
     pedestrian_max_queue: int
     pedestrian_final_queue: int
     events: list = None
+    phase_conflicts: list = None
 
     @property
     def average_vehicle_delay(self):
         return self.queue_person_seconds / self.served if self.served else 0.0
 
     def report(self):
-        return (
-            "ДЕТАЛЬНЫЙ СЦЕНАРИЙ ПЕРЕКРЁСТКА\n\n"
-            f"Продолжительность: {self.duration_seconds} с\n"
+        text = (
+            "ДЕТАЛЬНЫЙ СЦЕНАРИЙ ПЕРЕКРЁСТКА\\n\\n"
+            f"Продолжительность: {self.duration_seconds} с\\n"
             f"Транспорт: прибыло {self.arrivals}, обслужено {self.served}, "
-            f"максимальная суммарная очередь {self.max_queue}, остаток {self.final_queue}\n"
+            f"максимальная суммарная очередь {self.max_queue}, остаток {self.final_queue}\\n"
             f"Пешеходы: прибыло {self.pedestrian_arrivals}, прошло {self.pedestrians_served}, "
-            f"максимальная очередь {self.pedestrian_max_queue}, остаток {self.pedestrian_final_queue}\n"
-            f"Оценочная задержка на обслуженный автомобиль: {self.average_vehicle_delay:.1f} с\n\n"
-            "Модель учебная: пуассоновские прибытия и упрощённая пропускная способность; "
-            "нет перестроений, геометрических траекторий, конфликтных точек и калибровки по наблюдениям."
+            f"максимальная очередь {self.pedestrian_max_queue}, остаток {self.pedestrian_final_queue}\\n"
+            f"Оценочная задержка на обслуженный автомобиль: {self.average_vehicle_delay:.1f} с\\n\\n"
         )
+        text += self._conflict_report()
+        text += (
+            "\\nПравило остановки: при запрещающем сигнале и для движения, заблокированного конфликтом, "
+            "автомобиль ожидает у стоп-линии. Жёлтый сигнал не даёт обычного разрешения на въезд; "
+            "мигающий зелёный разрешает движение, предупреждая о скорой смене сигнала.\\n\\n"
+            "Модель учебная: конфликтные пары определяются консервативными правилами для условного "
+            "четырёхстороннего перекрёстка. Геометрию, знаки, дополнительные секции светофора, "
+            "стоп-линии и исключения ПДД необходимо проверить для конкретного объекта."
+        )
+        return text
+
+    def _conflict_report(self):
+        if not self.phase_conflicts:
+            return "Проверка конфликтов фаз: не обнаружены по упрощённым правилам.\\n"
+        lines = ["КОНФЛИКТЫ ДВИЖЕНИЙ В ФАЗАХ (опасные движения не обслуживаются):"]
+        for phase_name, pairs in self.phase_conflicts:
+            details = "; ".join(f"{first} ↔ {second}" for first, second in pairs)
+            lines.append(f"• {phase_name}: {details}")
+        return "\\n".join(lines) + "\\n"
 
 
 def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
@@ -82,6 +147,7 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
     # Empty phase assignments deliberately serve no movement: a missing signal group
     # must be visible and corrected by the user rather than silently guessed by the model.
     phases_by_start = []
+    phase_conflicts = []
     cursor = 0
     all_ids = [m.movement_id for m in movements] + [p.movement_id for p in pedestrians]
     for phase in phases:
@@ -93,7 +159,11 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
                 assigned.update(key for key in all_ids if key.startswith(prefix))
             else:
                 assigned.add(token)
-        phases_by_start.append((cursor, cursor + green, assigned))
+        conflicts = find_phase_conflicts(assigned, movements, pedestrians)
+        blocked = {movement_id for pair in conflicts for movement_id in pair}
+        if conflicts:
+            phase_conflicts.append((phase.name, conflicts))
+        phases_by_start.append((cursor, cursor + green, assigned - blocked))
         cursor += phase.duration_seconds
     queues = {m.movement_id: 0 for m in movements}
     pqueues = {p.movement_id: 0 for p in pedestrians}
@@ -142,4 +212,4 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
         queue_seconds += sum(queues.values())
     return DetailedResult(duration_seconds, arrivals, served, max_queue,
                           sum(queues.values()), queue_seconds, parrivals, pserved,
-                          max_pqueue, sum(pqueues.values()), events)
+                          max_pqueue, sum(pqueues.values()), events, phase_conflicts)
