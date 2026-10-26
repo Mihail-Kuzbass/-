@@ -9,6 +9,7 @@ from app.signals.plan import Phase, SignalPlan
 from app.simulation.engine import SimulationConfig, run_simulation
 from app.simulation.detailed import MovementDemand, PedestrianDemand, simulate_detailed
 from app.editor.traffic_scene import TrafficScene
+from app.editor.osm_road_preview import OSMRoadPreview
 from app.editor.movement_dialogs import LaneArrowDialog, PhaseMovementDialog
 from app.integrations.dgis import DGisClient, DGisError
 from app.settings import load_settings, save_settings
@@ -39,7 +40,7 @@ class MainWindow(QMainWindow):
         self.plan = SignalPlan.default()
         self.lane_turns = {}
         tabs = QTabWidget()
-        tabs.addTab(self._build_map_tab(), "2ГИС / импорт")
+        tabs.addTab(self._build_map_tab(), "OpenStreetMap / 2ГИС")
         tabs.addTab(self._build_scheme_tab(), "Схема")
         tabs.addTab(self._build_signals_tab(), "Светофорная программа")
         tabs.addTab(self._build_demand_tab(), "Транспортный поток")
@@ -67,16 +68,18 @@ class MainWindow(QMainWindow):
         save = QPushButton("Сохранить ключ локально"); save.clicked.connect(self._save_key); buttons.addWidget(save)
         search = QPushButton("Поиск объектов в 2ГИС"); search.clicked.connect(self._search_dgis); buttons.addWidget(search)
         l.addLayout(buttons)
-        road_box = QGroupBox("Дорожная геометрия (не является импортом из 2ГИС)")
+        road_box = QGroupBox("Дорожная геометрия OpenStreetMap")
         road_layout = QVBoxLayout(road_box)
-        road_note = QLabel("Импортирует линии дорог из OpenStreetMap через публичный Overpass API в пределах небольшого прямоугольника вокруг заданной точки. Это геометрия дорог, не готовая модель полос/фаз.")
+        road_note = QLabel("Загружает линии дорог OpenStreetMap через Overpass API и показывает их на предпросмотре. Это геометрия дорог, а не готовая модель полос/фаз; геометрию перекрёстка и сигналы нужно проверить вручную.")
         road_note.setWordWrap(True); road_layout.addWidget(road_note)
         road_buttons = QHBoxLayout()
         osm = QPushButton("Импортировать дороги OSM вокруг точки"); osm.clicked.connect(self._import_osm_roads); road_buttons.addWidget(osm)
         geo = QPushButton("Открыть GeoJSON"); geo.clicked.connect(self._open_geojson); road_buttons.addWidget(geo)
         save_geo = QPushButton("Сохранить импорт GeoJSON"); save_geo.clicked.connect(self._save_geojson); road_buttons.addWidget(save_geo)
         road_layout.addLayout(road_buttons)
-        l.addWidget(road_box)
+        self.osm_preview = OSMRoadPreview()
+        road_layout.addWidget(self.osm_preview, 1)
+        l.addWidget(road_box, 2)
         self.dgis_results = QTextEdit(); self.dgis_results.setReadOnly(True)
         self.dgis_results.setPlaceholderText("Здесь появятся результаты поиска 2ГИС или состояние импорта дорожных данных.")
         l.addWidget(self.dgis_results, 1)
@@ -91,6 +94,7 @@ class MainWindow(QMainWindow):
         self.dgis_results.setPlainText("Запрашиваются дорожные линии из OpenStreetMap/Overpass…")
         try:
             self.road_network = fetch_osm_roads(lat-dlat, lon-dlon, lat+dlat, lon+dlon)
+            self.osm_preview.set_data(self.road_network)
             features = self.road_network.get("features", [])
             highways = {}
             for feature in features:
@@ -111,6 +115,7 @@ class MainWindow(QMainWindow):
         if not path: return
         try:
             self.road_network = load_geojson(path)
+            self.osm_preview.set_data(self.road_network)
             count = len(self.road_network["features"])
             linear = sum(1 for f in self.road_network["features"] if f.get("geometry", {}).get("type") in ("LineString", "MultiLineString"))
             self.dgis_results.setPlainText(f"Открыт GeoJSON: {path}\nОбъектов: {count}\nЛинейных дорожных объектов: {linear}")
