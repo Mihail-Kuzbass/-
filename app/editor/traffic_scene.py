@@ -8,7 +8,7 @@ from math import hypot
 from PySide6.QtCore import Qt, QTimer, QPointF
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPainterPath
 from PySide6.QtWidgets import QWidget
-from app.simulation.detailed import find_phase_conflicts
+from app.simulation.detailed import resolve_phase_movements
 
 
 class TrafficScene(QWidget):
@@ -217,9 +217,9 @@ class TrafficScene(QWidget):
                 active.update(key for key in all_ids if key.startswith(token[:-1]))
             else:
                 active.add(token)
-        conflicts = find_phase_conflicts(active, self.movements, self.pedestrians)
-        blocked = {movement_id for pair in conflicts for movement_id in pair}
-        return active - blocked
+        # Use the same conflict resolution as the numeric simulator so signal
+        # heads, movement arrows, and vehicle service events stay synchronized.
+        return resolve_phase_movements(active, self.movements, self.pedestrians)
 
     @staticmethod
     def _movement_state(movement_id, stage, active):
