@@ -543,6 +543,7 @@ class MainWindow(QMainWindow):
         tables.addWidget(ped_box, 1)
         split.addLayout(tables, 3)
         self.traffic_scene = TrafficScene()
+        self.traffic_scene.setToolTip("Щёлкните правой кнопкой мыши за пределами перекрёстка, чтобы установить дорожный знак на подходе.")
         split.addWidget(self.traffic_scene, 2)
         outer.addLayout(split, 1)
         controls = QHBoxLayout()
@@ -651,7 +652,7 @@ class MainWindow(QMainWindow):
             result = simulate_detailed(
                 movements, pedestrians, self.plan.phases,
                 self.detail_duration.value(), self.detail_saturation.value(),
-                self.detail_seed.value()
+                self.detail_seed.value(), signs=self.traffic_scene.road_signs
             )
         except (ValueError, ArithmeticError) as exc:
             QMessageBox.warning(self, "Ошибка детального сценария", str(exc))
@@ -659,7 +660,7 @@ class MainWindow(QMainWindow):
         self.traffic_scene.configure(
             self.plan.phases, movements, pedestrians, self.plan.cycle_seconds,
             {name: spin.value() for name, spin in self.lane_spins.items()}, self.lane_turns,
-            result=result
+            result=result, signs=self.traffic_scene.road_signs
         )
         self.detailed_results.setPlainText(result.report())
 
