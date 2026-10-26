@@ -100,12 +100,37 @@ class MainWindow(QMainWindow):
         save_geo = QPushButton("Сохранить импорт GeoJSON"); save_geo.clicked.connect(self._save_geojson); road_buttons.addWidget(save_geo)
         road_layout.addLayout(road_buttons)
         self.osm_preview = OSMRoadPreview()
+        self.osm_preview.coordinateSelected.connect(self._map_coordinate_selected)
         road_layout.addWidget(self.osm_preview, 1)
+        map_controls = QHBoxLayout()
+        zoom_in = QPushButton("Приблизить +")
+        zoom_in.clicked.connect(lambda: self.osm_preview.zoom_by(1.25))
+        map_controls.addWidget(zoom_in)
+        zoom_out = QPushButton("Отдалить −")
+        zoom_out.clicked.connect(lambda: self.osm_preview.zoom_by(1 / 1.25))
+        map_controls.addWidget(zoom_out)
+        reset_map = QPushButton("Вся сеть")
+        reset_map.clicked.connect(self.osm_preview.reset_view)
+        map_controls.addWidget(reset_map)
+        map_controls.addStretch()
+        road_layout.addLayout(map_controls)
         l.addWidget(road_box, 2)
         self.dgis_results = QTextEdit(); self.dgis_results.setReadOnly(True)
         self.dgis_results.setPlaceholderText("Здесь появятся результаты поиска 2ГИС или состояние импорта дорожных данных.")
         l.addWidget(self.dgis_results, 1)
         return w
+
+    def _map_coordinate_selected(self, lat, lon, is_intersection):
+        self.lat.setValue(lat)
+        self.lon.setValue(lon)
+        self.city_combo.setCurrentText("Другой город / координаты вручную")
+        label = "Выбран узел пересечения дорожных линий" if is_intersection else "Выбрана ближайшая точка дороги"
+        self.dgis_results.setPlainText(
+            f"{label}.\\nШирота: {lat:.7f}\\nДолгота: {lon:.7f}\\n"
+            "Координаты перенесены в параметры импорта/поиска. "
+            "Автоматическое преобразование дорожной геометрии в полосы и фазы пока требует отдельного шага."
+        )
+        self.statusBar().showMessage(f"{label}: {lat:.6f}, {lon:.6f}", 8000)
 
     def _apply_city_preset(self, city_name):
         coords = self.city_presets.get(city_name)
