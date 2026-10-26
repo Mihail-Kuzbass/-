@@ -140,6 +140,10 @@ class OSMRoadPreview(QWidget):
         self.coordinateSelected.emit(chosen[1], chosen[0], bool(self._intersections))
         self.update()
 
+    def zoom_by(self, factor):
+        self._zoom = max(0.5, min(20.0, self._zoom * factor))
+        self.update()
+
     def reset_view(self):
         self._zoom, self._pan_x, self._pan_y = 1.0, 0.0, 0.0
         self.update()
