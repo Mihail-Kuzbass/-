@@ -215,7 +215,7 @@ class TrafficScene(QWidget):
         center = self._lane_center(approach, lane, g)
         cx, cy, left, right, top, bottom = (g[k] for k in ("cx", "cy", "left", "right", "top", "bottom"))
         exit_margin = 95.0
-        stop_offset = 38.0
+        stop_offset = 52.0
         if approach == "Север":
             start = QPointF(center.x(), top - stop_offset); entry = QPointF(center.x(), top)
             exit_side = {"Прямо": "Юг", "Налево": "Восток", "Направо": "Запад"}[turn]
