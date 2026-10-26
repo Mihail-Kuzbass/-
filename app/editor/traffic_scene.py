@@ -95,6 +95,10 @@ class TrafficScene(QWidget):
         self.walkers.clear()
         self.spawn_clock.clear()
         self.ped_spawn_clock.clear()
+        self.event_cursor = 0
+        self.sim_time = 0.0
+        self.phase_elapsed = 0.0
+        self.phase_index = 0
         self.update()
 
     def _advance(self):
@@ -505,4 +509,5 @@ class TrafficScene(QWidget):
             p.drawRoundedRect(int(x - 5), int(y - 5), 10, 10, 2, 2)
         p.setPen(QColor("#172033"))
         p.setFont(QFont("Segoe UI", 8))
-        p.drawText(10, int(h - 10), "Схема условная: траектории и переходы показаны полностью; расчёт не калиброван по натурным данным.")
+        footer = ("Воспроизведение событий расчёта" if self.replay_mode else "Демонстрационная анимация") + " · схема условная, не натурная геометрия"
+        p.drawText(10, int(h - 10), footer)
