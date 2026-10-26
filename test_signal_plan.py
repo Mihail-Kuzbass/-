@@ -87,7 +87,7 @@ def test_detailed_simulation_does_not_guess_empty_phase_assignments():
 
 
 
-def test_conflicting_opposing_left_turn_blocks_both_movements():
+def test_conflicting_opposing_left_turn_keeps_only_nonconflicting_movement():
     from app.simulation.detailed import MovementDemand, simulate_detailed
     phase = Phase("Конфликтная фаза", 20, 3, 2,
                   movements=["Север:1:Налево", "Юг:1:Прямо"])
@@ -97,7 +97,9 @@ def test_conflicting_opposing_left_turn_blocks_both_movements():
     ]
     result = simulate_detailed(movements, [], [phase], 20, 3600, 1)
     assert result.arrivals == 40
-    assert result.served == 0
+    # The straight movement may proceed; the conflicting left turn remains queued.
+    assert result.served == 20
+    assert result.final_queue == 20
     assert result.phase_conflicts
     assert "КОНФЛИКТЫ ДВИЖЕНИЙ" in result.report()
     assert "стоп-линии" in result.report()
