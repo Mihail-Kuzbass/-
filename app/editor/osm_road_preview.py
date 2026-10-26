@@ -19,6 +19,7 @@ class OSMRoadPreview(QWidget):
         self._pan_x = 0.0
         self._pan_y = 0.0
         self._drag_pos = None
+        self._dragged = False
         self._intersections = []
         self._selected = None
         self.setMouseTracking(True)
@@ -106,12 +107,15 @@ class OSMRoadPreview(QWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_pos = event.position().toPoint()
+            self._dragged = False
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
 
     def mouseMoveEvent(self, event):
         if self._drag_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
             delta = pos - self._drag_pos
+            if delta.manhattanLength() > 2:
+                self._dragged = True
             self._pan_x += delta.x()
             self._pan_y += delta.y()
             self._drag_pos = pos
@@ -120,9 +124,11 @@ class OSMRoadPreview(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton:
             return
+        was_dragged = self._dragged
         self._drag_pos = None
+        self._dragged = False
         self.setCursor(Qt.CursorShape.ArrowCursor)
-        if not self._bounds or not hasattr(self, "_transform"):
+        if was_dragged or not self._bounds or not hasattr(self, "_transform"):
             return
         minx, maxy, scale, ox, oy = self._transform
         px, py = event.position().x(), event.position().y()
