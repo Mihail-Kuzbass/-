@@ -250,17 +250,21 @@ class TrafficScene(QWidget):
         margin = 30.0
         path = QPainterPath()
         if crossing == "Север":
-            path.moveTo(cx - road * .40, top - margin)
-            path.lineTo(cx - road * .40, top + road + margin)
+            # North-leg crosswalk runs left-to-right across the north approach.
+            path.moveTo(left - margin, top - 16)
+            path.lineTo(right + margin, top - 16)
         elif crossing == "Юг":
-            path.moveTo(cx + road * .40, bottom + margin)
-            path.lineTo(cx + road * .40, bottom - road - margin)
+            # South-leg crosswalk runs right-to-left across the south approach.
+            path.moveTo(right + margin, bottom + 16)
+            path.lineTo(left - margin, bottom + 16)
         elif crossing == "Запад":
-            path.moveTo(left - margin, cy - road * .40)
-            path.lineTo(right + margin, cy - road * .40)
+            # West-leg crosswalk runs from the lower curb to the upper curb.
+            path.moveTo(left - 16, bottom + margin)
+            path.lineTo(left - 16, top - margin)
         else:
-            path.moveTo(right + margin, cy + road * .40)
-            path.lineTo(left - margin, cy + road * .40)
+            # East-leg crosswalk runs from the upper curb to the lower curb.
+            path.moveTo(right + 16, top - margin)
+            path.lineTo(right + 16, bottom + margin)
         return path
 
     def _point_at(self, item):
