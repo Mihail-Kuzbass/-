@@ -17,7 +17,22 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TrafficSignalStudio — моделирование светофорных объектов")
-        self.resize(1220, 820)
+        self.resize(1420, 900)
+        self.setMinimumSize(1120, 740)
+        self.setStyleSheet("""
+            QMainWindow, QWidget { background: #f3f6fa; color: #202b3c; font-family: "Segoe UI"; font-size: 10pt; }
+            QTabWidget::pane { border: 1px solid #cbd5e1; background: #ffffff; top: -1px; }
+            QTabBar::tab { background: #e2e8f0; color: #334155; padding: 10px 16px; margin-right: 3px; border-top-left-radius: 6px; border-top-right-radius: 6px; }
+            QTabBar::tab:selected { background: #ffffff; color: #075985; font-weight: 600; border-bottom: 3px solid #0284c7; }
+            QGroupBox { background: #ffffff; border: 1px solid #d5deea; border-radius: 8px; margin-top: 12px; padding: 10px; font-weight: 600; }
+            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; color: #334155; }
+            QPushButton { background: #e2e8f0; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 12px; color: #1e293b; font-weight: 600; }
+            QPushButton:hover { background: #dbeafe; border-color: #60a5fa; }
+            QPushButton:pressed { background: #bfdbfe; }
+            QTableWidget, QTextEdit, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; padding: 4px; selection-background-color: #bfdbfe; selection-color: #0f172a; }
+            QHeaderView::section { background: #eaf0f7; color: #334155; border: 0; border-bottom: 1px solid #cbd5e1; padding: 6px; font-weight: 600; }
+            QStatusBar { background: #e2e8f0; color: #475569; }
+        """)
         self.settings = load_settings()
         self.road_network = None
         self.plan = SignalPlan.default()
