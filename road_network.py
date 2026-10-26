@@ -111,3 +111,109 @@ def load_geojson(path: str | Path) -> dict[str, Any]:
 
 def save_geojson(data: dict[str, Any], path: str | Path) -> None:
     Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def infer_intersection_approaches(geojson: dict[str, Any], latitude: float, longitude: float,
+                                  tolerance_m: float = 22.0) -> dict[str, Any]:
+    """Infer connected approach directions and approximate lane counts near a selected OSM node.
+
+    OSM ways often share coordinates at junctions. This routine is intentionally conservative:
+    it only trusts line vertices close to the selected point, and labels lane counts as estimates.
+    """
+    import math
+
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        raise RoadNetworkError("Координаты перекрёстка находятся вне допустимого диапазона.")
+    if not 5 <= tolerance_m <= 100:
+        raise RoadNetworkError("Радиус поиска узла должен быть в диапазоне 5–100 м.")
+
+    def distance_m(lon, lat):
+        dy = (lat - latitude) * 111_000.0
+        dx = (lon - longitude) * 111_000.0 * max(0.05, math.cos(math.radians(latitude)))
+        return math.hypot(dx, dy)
+
+    directions = {"Север": [], "Восток": [], "Юг": [], "Запад": []}
+    matched = []
+    for feature in (geojson or {}).get("features", []):
+        geometry = feature.get("geometry") or {}
+        kind, coords = geometry.get("type"), geometry.get("coordinates") or []
+        lines = [coords] if kind == "LineString" else coords if kind == "MultiLineString" else []
+        props = feature.get("properties") or {}
+        for line in lines:
+            for index, point in enumerate(line):
+                if len(point) < 2 or distance_m(float(point[0]), float(point[1])) > tolerance_m:
+                    continue
+                neighbors = []
+                if index > 0:
+                    neighbors.append(line[index - 1])
+                if index + 1 < len(line):
+                    neighbors.append(line[index + 1])
+                for neighbor in neighbors:
+                    dx = (float(neighbor[0]) - longitude) * math.cos(math.radians(latitude))
+                    dy = float(neighbor[1]) - latitude
+                    if math.hypot(dx, dy) < 1e-9:
+                        continue
+                    angle = math.degrees(math.atan2(dx, dy)) % 360.0
+                    if angle >= 315 or angle < 45:
+                        side = "Север"
+                    elif angle < 135:
+                        side = "Восток"
+                    elif angle < 225:
+                        side = "Юг"
+                    else:
+                        side = "Запад"
+                    try:
+                        lane_total = int(str(props.get("lanes", "")).split(";")[0])
+                    except (TypeError, ValueError):
+                        lane_total = 0
+                    try:
+                        directional = int(str(props.get("lanes:forward", "")).split(";")[0])
+                    except (TypeError, ValueError):
+                        directional = 0
+                    try:
+                        backward = int(str(props.get("lanes:backward", "")).split(";")[0])
+                    except (TypeError, ValueError):
+                        backward = 0
+                    if directional > 0 or backward > 0:
+                        estimate = max(directional, backward, 1)
+                    elif lane_total > 0:
+                        estimate = max(1, math.ceil(lane_total / 2))
+                    else:
+                        estimate = 1
+                    record = {"approach": side, "lanes": min(8, estimate),
+                              "highway": props.get("highway", "unknown"),
+                              "name": props.get("name", ""),
+                              "osm_id": props.get("osm_id")}
+                    directions[side].append(record)
+                    matched.append(record)
+
+    # Deduplicate repeated geometry vertices from the same OSM way and approach.
+    approaches = {}
+    for side, records in directions.items():
+        unique = {}
+        for record in records:
+            key = (record.get("osm_id"), record.get("name"), record.get("highway"))
+            unique[key] = record
+        if unique:
+            records = list(unique.values())
+            approaches[side] = {
+                "lanes": max(record["lanes"] for record in records),
+                "roads": records,
+                "names": sorted({record["name"] for record in records if record["name"]}),
+            }
+    if len(approaches) < 2:
+        raise RoadNetworkError(
+            "Не удалось надёжно определить минимум два подхода рядом с выбранной точкой. "
+            "Увеличьте масштаб, выберите общий узел дорог или загрузите более подробные данные OSM."
+        )
+    return {
+        "latitude": latitude,
+        "longitude": longitude,
+        "approaches": approaches,
+        "detected_approach_count": len(approaches),
+        "warnings": [
+            "Число полос — оценка по тегам OSM; при отсутствии тегов принято 1.",
+            "Данные OSM не задают реальные разрешённые повороты, стоп-линии, фазы или интенсивность.",
+            "Текущий схематический редактор имеет четыре стороны; отсутствующие подходы показаны как 1 полоса и требуют ручной проверки."
+        ],
+    }
