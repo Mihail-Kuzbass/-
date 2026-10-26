@@ -78,13 +78,8 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
     cycle = sum(p.duration_seconds for p in phases)
     if cycle <= 0:
         raise ValueError("Длина цикла должна быть положительной.")
-    # Legacy plans with no explicit assignments retain a useful, predictable two-axis default.
-    if not any(p.movements for p in phases):
-        for index, phase in enumerate(phases):
-            if index == 0:
-                phase.movements = [m.movement_id for m in movements if m.approach in ("Север", "Юг")]
-            elif index == 1:
-                phase.movements = [m.movement_id for m in movements if m.approach in ("Восток", "Запад")]
+    # Empty phase assignments deliberately serve no movement: a missing signal group
+    # must be visible and corrected by the user rather than silently guessed by the model.
     phases_by_start = []
     cursor = 0
     all_ids = [m.movement_id for m in movements] + [p.movement_id for p in pedestrians]
