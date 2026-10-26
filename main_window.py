@@ -573,7 +573,8 @@ class MainWindow(QMainWindow):
             return
         self.traffic_scene.configure(
             self.plan.phases, movements, pedestrians, self.plan.cycle_seconds,
-            {name: spin.value() for name, spin in self.lane_spins.items()}, self.lane_turns
+            {name: spin.value() for name, spin in self.lane_spins.items()}, self.lane_turns,
+            result=result
         )
         self.detailed_results.setPlainText(result.report())
 
