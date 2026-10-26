@@ -14,7 +14,7 @@ from app.editor.osm_road_preview import OSMRoadPreview
 from app.editor.movement_dialogs import LaneArrowDialog, PhaseMovementDialog
 from app.integrations.dgis import DGisClient, DGisError
 from app.settings import load_settings, save_settings
-from app.integrations.road_network import fetch_osm_roads, load_geojson, save_geojson, RoadNetworkError
+from app.integrations.road_network import fetch_osm_roads, infer_intersection_approaches, load_geojson, save_geojson, RoadNetworkError
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -38,6 +38,8 @@ class MainWindow(QMainWindow):
         """)
         self.settings = load_settings()
         self.road_network = None
+        self.selected_map_coordinate = None
+        self.imported_intersection = None
         self.plan = SignalPlan.default()
         self.lane_turns = {}
         tabs = QTabWidget()
@@ -97,6 +99,7 @@ class MainWindow(QMainWindow):
         road_note.setWordWrap(True); road_layout.addWidget(road_note)
         road_buttons = QHBoxLayout()
         osm = QPushButton("Импортировать дороги OSM вокруг точки"); osm.clicked.connect(self._import_osm_roads); road_buttons.addWidget(osm)
+        auto_scheme = QPushButton("Создать схему по выбранному перекрёстку"); auto_scheme.clicked.connect(self._auto_create_intersection); road_buttons.addWidget(auto_scheme)
         geo = QPushButton("Открыть GeoJSON"); geo.clicked.connect(self._open_geojson); road_buttons.addWidget(geo)
         save_geo = QPushButton("Сохранить импорт GeoJSON"); save_geo.clicked.connect(self._save_geojson); road_buttons.addWidget(save_geo)
         road_layout.addLayout(road_buttons)
@@ -122,16 +125,62 @@ class MainWindow(QMainWindow):
         return w
 
     def _map_coordinate_selected(self, lat, lon, is_intersection):
+        self.selected_map_coordinate = (float(lat), float(lon))
         self.lat.setValue(lat)
         self.lon.setValue(lon)
         self.city_combo.setCurrentText("Другой город / координаты вручную")
         label = "Выбран узел пересечения дорожных линий" if is_intersection else "Выбрана ближайшая точка дороги"
         self.dgis_results.setPlainText(
             f"{label}.\\nШирота: {lat:.7f}\\nДолгота: {lon:.7f}\\n"
-            "Координаты перенесены в параметры импорта/поиска. "
-            "Автоматическое преобразование дорожной геометрии в полосы и фазы пока требует отдельного шага."
+            "Координаты сохранены. Нажмите «Создать схему по выбранному перекрёстку», чтобы автоматически оценить подходы и число полос."
         )
         self.statusBar().showMessage(f"{label}: {lat:.6f}, {lon:.6f}", 8000)
+
+    def _auto_create_intersection(self):
+        if not self.road_network or not self.road_network.get("features"):
+            QMessageBox.information(self, "Нет дорожных данных",
+                                    "Сначала импортируйте дороги OSM или откройте GeoJSON.")
+            return
+        if not self.selected_map_coordinate:
+            QMessageBox.information(self, "Выберите перекрёсток",
+                                    "На карте щёлкните по узлу пересечения дорог, затем повторите импорт.")
+            return
+        lat, lon = self.selected_map_coordinate
+        try:
+            inferred = infer_intersection_approaches(self.road_network, lat, lon)
+        except RoadNetworkError as exc:
+            QMessageBox.warning(self, "Не удалось создать схему", str(exc))
+            return
+
+        detected = inferred["approaches"]
+        # The current schematic editor is four-sided. Missing approaches are kept
+        # at one lane, and the generated metadata clearly marks them for manual review.
+        for approach, spin in self.lane_spins.items():
+            estimate = detected.get(approach, {}).get("lanes", 1)
+            spin.setValue(max(1, min(8, int(estimate))))
+        self.imported_intersection = inferred
+        self._refresh_movement_rows()
+        self.scheme.update()
+        self.tabs.setCurrentWidget(self.tabs.widget(1))
+
+        lines = [
+            "Черновая схема создана по выбранной точке OpenStreetMap.",
+            f"Координаты: {lat:.7f}, {lon:.7f}",
+            f"Определено подходов: {inferred['detected_approach_count']} из 4",
+            "",
+            "Оценка полос по подходам:",
+        ]
+        for approach in ("Север", "Восток", "Юг", "Запад"):
+            details = detected.get(approach)
+            if details:
+                names = ", ".join(details.get("names", [])) or "дорога без названия"
+                lines.append(f"• {approach}: {details['lanes']} полос(ы) (оценка); {names}")
+            else:
+                lines.append(f"• {approach}: дорога не обнаружена — схема условно оставлена с 1 полосой")
+        lines += ["", "Проверьте вручную геометрию, число полос, разрешённые повороты, стоп-линии, пешеходные переходы и фазы."]
+        lines += [f"• {warning}" for warning in inferred["warnings"]]
+        self.dgis_results.setPlainText("\n".join(lines))
+        self.statusBar().showMessage("Создан черновик схемы; проверьте его перед моделированием.", 10000)
 
     def _apply_city_preset(self, city_name):
         coords = self.city_presets.get(city_name)
@@ -447,8 +496,9 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Сохранить схему перекрёстка", "intersection.json", "Схема JSON (*.json)")
         if not path: return
         data = {
-            "schema_version": 2,
+            "schema_version": 3,
             "lane_counts": {k: v.value() for k, v in self.lane_spins.items()},
+            "source_intersection": self.imported_intersection,
             "lane_turns": [
                 {"approach": approach, "lane": lane, "turns": list(turns)}
                 for (approach, lane), turns in sorted(self.lane_turns.items())
@@ -469,9 +519,10 @@ class MainWindow(QMainWindow):
             with open(path, "r", encoding="utf-8") as stream:
                 data = json.load(stream)
             version = data.get("schema_version", 1)
-            if version not in (1, 2):
+            if version not in (1, 2, 3):
                 raise ValueError("Неизвестная версия схемы перекрёстка.")
             counts = data["lane_counts"]
+            self.imported_intersection = data.get("source_intersection") if version >= 3 else None
             for approach, spin in self.lane_spins.items():
                 spin.setValue(int(counts.get(approach, 2)))
             if version == 2:
