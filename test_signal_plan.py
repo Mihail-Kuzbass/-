@@ -168,3 +168,53 @@ def test_prohibitory_sign_blocks_right_turn():
     signs = [{"approach": "Запад", "code": "3.18.1"}]
     assert not movement_allowed_by_signs("Запад", "Направо", signs)
     assert movement_allowed_by_signs("Запад", "Прямо", signs)
+
+
+def test_vehicle_profile_uses_user_speed_in_kmh_and_validates_values():
+    from app.simulation.microsimulation import VehicleProfile
+    profile = VehicleProfile("Легковой", 60, 4.5, 1.8, 2.0, 3.5)
+    assert profile.desired_speed_kmh == 60
+    with pytest.raises(ValueError):
+        VehicleProfile("Неверный", 0, 4.5, 1.8, 2.0, 3.5)
+
+
+def test_microsimulation_respects_red_signal_and_counts_arrivals():
+    from app.simulation.microsimulation import MicroMovement, simulate_micro
+    plan = [Phase("Красный", 10, 0, 0, movements=[])]
+    result = simulate_micro(
+        [MicroMovement("Север", 1, "Прямо", 3600, 30)],
+        plan, duration_seconds=10, seed=3, time_step_s=0.2,
+    )
+    assert result.arrivals == 10
+    assert result.departed == 0
+    assert result.final_queue == 10
+
+
+def test_microsimulation_is_reproducible_and_respects_speed_limit():
+    from app.simulation.microsimulation import MicroMovement, VehicleProfile, simulate_micro
+    plan = [Phase("Север", 20, 0, 0, movements=["Север:*"])]
+    profiles = [VehicleProfile("Легковой", 80, 4.5, 1.8, 2.0, 3.5, weight=1)]
+    movements = [MicroMovement("Север", 1, "Прямо", 600, 25)]
+    a = simulate_micro(movements, plan, 60, profiles, seed=5)
+    b = simulate_micro(movements, plan, 60, profiles, seed=5)
+    assert a.arrivals == b.arrivals
+    assert a.departed == b.departed
+    assert all(event.get("speed_kmh", 0) <= 25 for event in a.events if event["kind"] == "entered")
+    assert a.final_queue >= 0
+
+
+def test_microsimulation_conflicting_movements_cannot_enter_together():
+    from app.simulation.microsimulation import MicroMovement, simulate_micro
+    plan = [Phase("Одновременный зелёный", 30, 0, 0,
+                  movements=["Север:*", "Восток:*"])]
+    movements = [
+        MicroMovement("Север", 1, "Прямо", 3600, 30),
+        MicroMovement("Восток", 1, "Прямо", 3600, 30),
+    ]
+    result = simulate_micro(movements, plan, duration_seconds=30, seed=9)
+    entries = {}
+    for event in result.events:
+        if event["kind"] == "entered":
+            entries.setdefault(event["time"], []).append(event["movement_id"])
+    assert all(not ({"Север:1:Прямо", "Восток:1:Прямо"} <= set(ids))
+               for ids in entries.values())
