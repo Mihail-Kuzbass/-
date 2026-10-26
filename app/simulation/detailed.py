@@ -87,9 +87,17 @@ def simulate_detailed(movements, pedestrians, phases, duration_seconds=1800,
                 phase.movements = [m.movement_id for m in movements if m.approach in ("Восток", "Запад")]
     phases_by_start = []
     cursor = 0
+    all_ids = [m.movement_id for m in movements] + [p.movement_id for p in pedestrians]
     for phase in phases:
         green = phase.green_seconds + phase.flashing_green_seconds
-        phases_by_start.append((cursor, cursor + green, set(phase.movements)))
+        assigned = set()
+        for token in phase.movements:
+            if token.endswith(":*"):
+                prefix = token[:-1]
+                assigned.update(key for key in all_ids if key.startswith(prefix))
+            else:
+                assigned.add(token)
+        phases_by_start.append((cursor, cursor + green, assigned))
         cursor += phase.duration_seconds
     queues = {m.movement_id: 0 for m in movements}
     pqueues = {p.movement_id: 0 for p in pedestrians}
