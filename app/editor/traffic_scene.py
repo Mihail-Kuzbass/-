@@ -552,6 +552,42 @@ class TrafficScene(QWidget):
                     self._draw_signal_head(p, left - 12, pos.y(), state, horizontal=True)
                 else:
                     self._draw_signal_head(p, right + 12, pos.y(), state, horizontal=True)
+        # Draw placed signs on their approach (schematic symbols with sign number).
+        for sign in self.road_signs:
+            approach, code = sign.get("approach"), sign.get("code", "")
+            if approach == "Север":
+                sx, sy = cx + road * 0.29, top - 53
+            elif approach == "Юг":
+                sx, sy = cx + road * 0.29, bottom + 54
+            elif approach == "Запад":
+                sx, sy = left - 55, cy - road * 0.29
+            else:
+                sx, sy = right + 55, cy - road * 0.29
+            group = SIGN_CATALOG.get(code, ("Знак", "other"))[1]
+            p.setPen(QPen(QColor("#334155"), 1))
+            if group == "priority" and code == "2.1":
+                p.setBrush(QColor("#facc15"))
+                p.drawPolygon([QPointF(sx, sy-10), QPointF(sx+10, sy),
+                               QPointF(sx, sy+10), QPointF(sx-10, sy)])
+            elif group == "priority" and code in ("2.4", "2.5"):
+                p.setBrush(QColor("#ffffff"))
+                p.drawPolygon([QPointF(sx-10, sy-7), QPointF(sx+10, sy-7),
+                               QPointF(sx, sy+10)])
+            elif group == "prohibitory":
+                p.setBrush(QColor("#ffffff"))
+                p.drawEllipse(QPointF(sx, sy), 10, 10)
+                p.setPen(QPen(QColor("#dc2626"), 3))
+                p.drawEllipse(QPointF(sx, sy), 10, 10)
+            else:
+                p.setBrush(QColor("#2563eb"))
+                p.drawEllipse(QPointF(sx, sy), 10, 10)
+            p.setPen(QColor("#111827") if group != "mandatory" else QColor("#ffffff"))
+            p.setFont(QFont("Segoe UI", 6, QFont.Weight.Bold))
+            p.drawText(int(sx-10), int(sy+3), code)
+            p.setPen(QColor("#0f172a"))
+            p.setFont(QFont("Segoe UI", 7))
+            p.drawText(int(sx-42), int(sy+22), code + " " + sign.get("name", ""))
+
         # Distinct top-down vehicle silhouettes; sizes are schematic, not to scale.
         for vehicle in self.vehicles:
             pt = self._point_at(vehicle)
