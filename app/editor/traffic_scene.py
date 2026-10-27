@@ -366,8 +366,8 @@ class TrafficScene(QWidget):
         # Each arm has two traffic directions; lane positions stay on the
         # right-hand half of the inbound carriageway.
         offset = (lane - 0.5) / count * g["road"] * 0.24
-        nx, ny = math.cos(bearing), math.sin(bearing)
-        tx, ty = -ny, nx
+        nx, ny = math.sin(bearing), -math.cos(bearing)
+        tx, ty = math.cos(bearing), math.sin(bearing)
         radius = g["road"] * 0.56
         return QPointF(g["cx"] + nx * radius - tx * offset,
                        g["cy"] + ny * radius - ty * offset)
@@ -377,8 +377,8 @@ class TrafficScene(QWidget):
         g = self._layout()
         bearing = self._approach_bearing(approach)
         angle = math.radians(bearing)
-        nx, ny = math.cos(angle), math.sin(angle)
-        tx, ty = -ny, nx
+        nx, ny = math.sin(angle), -math.cos(angle)
+        tx, ty = math.cos(angle), math.sin(angle)
         center = self._lane_center(approach, lane, g)
         road_radius = g["road"] * 0.56
         approach_margin = 115.0
@@ -389,8 +389,8 @@ class TrafficScene(QWidget):
                         g["cy"] + ny * road_radius - ty * ((lane - 0.5) / max(1, self.lane_counts.get(approach, 1)) * g["road"] * 0.24))
         offsets = {"Прямо": 180, "Налево": 90, "Направо": -90}
         exit_bearing = math.radians((bearing + offsets.get(turn, 180)) % 360)
-        ex, ey = math.cos(exit_bearing), math.sin(exit_bearing)
-        etx, ety = -ey, ex
+        ex, ey = math.sin(exit_bearing), -math.cos(exit_bearing)
+        etx, ety = math.cos(exit_bearing), math.sin(exit_bearing)
         exit_side = min(self.lane_counts, key=lambda name: abs((self._approach_bearing(name) - math.degrees(exit_bearing) + 180) % 360 - 180))
         exit_count = max(1, self.lane_counts.get(exit_side, 1))
         exit_offset = (lane - 0.5) / exit_count * g["road"] * 0.24
