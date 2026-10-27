@@ -179,7 +179,7 @@ class MainWindow(QMainWindow):
             "",
             "Оценка полос по подходам:",
         ]
-        for approach in ("Север", "Восток", "Юг", "Запад"):
+        for approach in self._active_approaches():
             details = detected.get(approach)
             if details:
                 names = ", ".join(details.get("names", [])) or "дорога без названия"
@@ -325,8 +325,16 @@ class MainWindow(QMainWindow):
         w = QWidget(); layout = QVBoxLayout(w)
         intro = QLabel("Выберите геометрический шаблон вручную или создайте черновик по выбранному узлу OSM на вкладке карты. Геометрия шаблона условная; число полос, направления и разрешённые повороты необходимо проверить.")
         intro.setWordWrap(True); layout.addWidget(intro)
+        template_row = QHBoxLayout()
+        template_row.addWidget(QLabel("Тип перекрёстка:"))
+        self.template_combo = QComboBox()
+        self.template_combo.addItems(list(IntersectionView.TEMPLATES.keys()))
+        self.template_combo.currentTextChanged.connect(self._intersection_template_changed)
+        template_row.addWidget(self.template_combo, 1)
+        layout.addLayout(template_row)
         controls = QGroupBox("Полосы по направлениям"); form = QFormLayout(controls)
         self.lane_spins = {}
+        self.lane_labels = {}
         self.lane_turns = {}
         for approach in IntersectionView.APPROACHES:
             spin = QSpinBox(); spin.setRange(1, 8); spin.setValue(2); spin.setSuffix(" полос(ы)")
@@ -335,6 +343,7 @@ class MainWindow(QMainWindow):
             for lane in range(1, spin.value() + 1):
                 self.lane_turns[(approach, lane)] = ("Прямо", "Налево", "Направо")
             form.addRow(approach, spin)
+            self.lane_labels[approach] = form.labelForField(spin)
         layout.addWidget(controls)
         arrow_row = QHBoxLayout()
         arrows = QPushButton("Настроить стрелки по каждой полосе…")
@@ -344,6 +353,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(arrow_row)
         self.scheme = IntersectionView()
         self.scheme.set_lane_turns(self.lane_turns)
+        self._intersection_template_changed(self.template_combo.currentText())
         layout.addWidget(self.scheme, 1)
         buttons = QHBoxLayout()
         save = QPushButton("Сохранить схему…"); save.clicked.connect(self._save_intersection); buttons.addWidget(save)
@@ -351,9 +361,35 @@ class MainWindow(QMainWindow):
         layout.addLayout(buttons)
         return w
 
+    def _active_approaches(self):
+        template = self.template_combo.currentText() if hasattr(self, "template_combo") else "Классический 4-конечный"
+        return IntersectionView.TEMPLATE_APPROACHES.get(template, IntersectionView.TEMPLATE_APPROACHES["Классический 4-конечный"])
+
     def _intersection_template_changed(self, template):
         if hasattr(self, "scheme"):
             self.scheme.set_template(template)
+        active = set(IntersectionView.TEMPLATE_APPROACHES.get(template, ()))
+        for approach, spin in getattr(self, "lane_spins", {}).items():
+            spin.setVisible(approach in active)
+            label = getattr(self, "lane_labels", {}).get(approach)
+            if label:
+                label.setVisible(approach in active)
+        if hasattr(self, "sign_approach_combo"):
+            current = self.sign_approach_combo.currentText()
+            self.sign_approach_combo.blockSignals(True)
+            self.sign_approach_combo.clear()
+            self.sign_approach_combo.addItems(list(self._active_approaches()))
+            self.sign_approach_combo.setCurrentText(current if current in active else self._active_approaches()[0])
+            self.sign_approach_combo.blockSignals(False)
+        if hasattr(self, "movement_table"):
+            self._refresh_movement_rows()
+        if hasattr(self, "pedestrian_table"):
+            previous = {self.pedestrian_table.item(r, 0).text(): self.pedestrian_table.item(r, 1).text()
+                        for r in range(self.pedestrian_table.rowCount()) if self.pedestrian_table.item(r, 0)}
+            self.pedestrian_table.setRowCount(len(self._active_approaches()))
+            for row, name in enumerate(self._active_approaches()):
+                self.pedestrian_table.setItem(row, 0, QTableWidgetItem(name))
+                self.pedestrian_table.setItem(row, 1, QTableWidgetItem(previous.get(name, "80")))
         self.statusBar().showMessage(f"Выбран шаблон: {template}. Проверьте направления движения.", 6000)
 
     def _lane_count_changed(self, approach, count):
@@ -369,7 +405,7 @@ class MainWindow(QMainWindow):
             self._refresh_movement_rows()
 
     def _edit_lane_arrows(self):
-        counts = {name: spin.value() for name, spin in self.lane_spins.items()}
+        counts = {name: spin.value() for name, spin in self.lane_spins.items() if name in self._active_approaches()}
         dialog = LaneArrowDialog(counts, self.lane_turns, self)
         if dialog.exec():
             self.lane_turns = dialog.values()
@@ -588,7 +624,7 @@ class MainWindow(QMainWindow):
         sign_box = QGroupBox("Дорожные знаки (ПДД РФ)")
         sign_layout = QHBoxLayout(sign_box)
         self.sign_approach_combo = QComboBox()
-        self.sign_approach_combo.addItems(("Север", "Восток", "Юг", "Запад"))
+        self.sign_approach_combo.addItems(list(self._active_approaches()))
         self.sign_code_combo = QComboBox()
         for code, (name, group) in SIGN_CATALOG.items():
             self.sign_code_combo.addItem(f"{code} — {name}", code)
@@ -621,10 +657,10 @@ class MainWindow(QMainWindow):
         tables.addWidget(move_box, 3)
         ped_box = QGroupBox("Пешеходные переходы — чел./ч")
         ped_layout = QVBoxLayout(ped_box)
-        self.pedestrian_table = QTableWidget(4, 2)
+        self.pedestrian_table = QTableWidget(len(self._active_approaches()), 2)
         self.pedestrian_table.setHorizontalHeaderLabels(["Переход", "Чел./ч"])
         self.pedestrian_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        for row, name in enumerate(("Север", "Восток", "Юг", "Запад")):
+        for row, name in enumerate(self._active_approaches()):
             self.pedestrian_table.setItem(row, 0, QTableWidgetItem(name))
             self.pedestrian_table.setItem(row, 1, QTableWidgetItem("80"))
         ped_layout.addWidget(self.pedestrian_table)
@@ -727,7 +763,7 @@ class MainWindow(QMainWindow):
                     pass
         rows = []
         turns = ("Прямо", "Налево", "Направо")
-        for approach in IntersectionView.APPROACHES:
+        for approach in self._active_approaches():
             count = self.lane_spins[approach].value()
             for lane in range(1, count + 1):
                 for turn in self.lane_turns.get((approach, lane), turns):
@@ -747,7 +783,7 @@ class MainWindow(QMainWindow):
                 demand = int(self.movement_table.item(row, 3).text())
             except (AttributeError, ValueError) as exc:
                 raise ValueError(f"Транспортная строка {row + 1}: проверьте полосу и интенсивность.") from exc
-            if approach not in IntersectionView.APPROACHES or turn not in ("Прямо", "Налево", "Направо"):
+            if approach not in self._active_approaches() or turn not in ("Прямо", "Налево", "Направо"):
                 raise ValueError(f"Транспортная строка {row + 1}: неизвестный подход или манёвр.")
             if lane < 1 or demand < 0:
                 raise ValueError(f"Транспортная строка {row + 1}: полоса должна быть положительной, интенсивность — неотрицательной.")
@@ -759,7 +795,7 @@ class MainWindow(QMainWindow):
                 demand = int(self.pedestrian_table.item(row, 1).text())
             except (AttributeError, ValueError) as exc:
                 raise ValueError(f"Пешеходная строка {row + 1}: введите целую интенсивность.") from exc
-            if crossing not in IntersectionView.APPROACHES or demand < 0:
+            if crossing not in self._active_approaches() or demand < 0:
                 raise ValueError(f"Пешеходная строка {row + 1}: проверьте название перехода и интенсивность.")
             pedestrians.append(PedestrianDemand(crossing, demand))
         return movements, pedestrians
