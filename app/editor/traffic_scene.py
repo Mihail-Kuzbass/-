@@ -13,7 +13,7 @@ from app.signs import SIGN_CATALOG, movement_allowed_by_signs
 
 
 class TrafficScene(QWidget):
-    APPROACHES = ("Север", "Восток", "Юг", "Запад")
+    APPROACHES = ("Север", "Северо-восток", "Восток", "Юго-восток", "Юг", "Юго-запад", "Запад", "Северо-запад")
     TURNS = ("Прямо", "Налево", "Направо")
     TURN_GLYPHS = {
         "Север": {"Прямо": "↓", "Налево": "↘", "Направо": "↙"},
@@ -556,8 +556,16 @@ class TrafficScene(QWidget):
                             f"{'АНИМАЦИЯ' if self.running else 'ПАУЗА'}")
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor("#3b434d"))
-        p.drawRect(int(left), 0, int(road), int(h))
-        p.drawRect(0, int(top), int(w), int(road))
+        p.setPen(QPen(QColor("#3b434d"), road, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap, Qt.PenJoinStyle.RoundJoin))
+        from app.simulation.detailed import APPROACH_BEARINGS
+        for arm in self.lane_counts:
+            bearing = math.radians(APPROACH_BEARINGS.get(arm, 0))
+            endpoint = QPointF(cx + math.sin(bearing) * max(w, h) * 0.72,
+                               cy - math.cos(bearing) * max(w, h) * 0.72)
+            road_path = QPainterPath(QPointF(cx, cy))
+            road_path.lineTo(endpoint)
+            p.drawPath(road_path)
+        p.setPen(QPen(QColor("#e2e8f0"), 1, Qt.PenStyle.DashLine))
         # Dashed lane markings on each approach.
         p.setPen(QPen(QColor("#b9c2ca"), 1, Qt.PenStyle.DashLine))
         for approach in ("Север", "Юг"):
@@ -599,7 +607,7 @@ class TrafficScene(QWidget):
         p.drawLine(int(left - 29), int(top), int(left - 29), int(bottom))
         p.drawLine(int(right + 29), int(top), int(right + 29), int(bottom))
         # Turn arrows sit in their actual lanes, facing the direction of travel.
-        for approach in self.APPROACHES:
+        for approach in self.lane_counts:
             for lane in range(1, max(1, self.lane_counts.get(approach, 1)) + 1):
                 pos = self._lane_center(approach, lane, g)
                 turns = self.lane_turns.get((approach, lane), self.TURNS)
@@ -611,12 +619,13 @@ class TrafficScene(QWidget):
                     x, y = left - 52, pos.y()
                 else:
                     x, y = right + 52, pos.y()
+                glyphs = self.TURN_GLYPHS.get(approach, {"Прямо": "↑", "Налево": "↶", "Направо": "↷"})
                 for j, turn in enumerate(turns):
                     movement_state = self._movement_state(f"{approach}:{lane}:{turn}", stage, active)
                     arrow_color = self.COLORS.get(movement_state, self.COLORS["red"])
                     self._draw_arrow(p, x + (j - (len(turns)-1)/2) * 17 if approach in ("Север", "Юг") else x,
                                      y if approach in ("Север", "Юг") else y + (j - (len(turns)-1)/2) * 17,
-                                     self.TURN_GLYPHS[approach].get(turn, "·"), arrow_color)
+                                     glyphs.get(turn, "·"), arrow_color)
         # Signal heads are installed at the stop line, one per lane/approach.
         for approach in self.APPROACHES:
             count = max(1, self.lane_counts.get(approach, 1))
