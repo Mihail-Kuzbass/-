@@ -153,7 +153,7 @@ class MainWindow(QMainWindow):
             return
 
         detected = inferred["approaches"]
-        detected_count = inferred["detected_approach_count"]
+        detected_count = inferred.get("detected_arm_count", inferred["detected_approach_count"])
         if detected_count == 3:
             self.template_combo.setCurrentText("Т-образный")
         elif detected_count == 5:
