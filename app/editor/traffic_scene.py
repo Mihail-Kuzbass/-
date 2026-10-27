@@ -373,35 +373,50 @@ class TrafficScene(QWidget):
                        g["cy"] + ny * radius - ty * offset)
 
     def _vehicle_path(self, approach, lane, turn):
-        import math
+        """Build a smooth lane-centred path that remains inside the paved arms."""
         g = self._layout()
         bearing = self._approach_bearing(approach)
         angle = math.radians(bearing)
         nx, ny = math.sin(angle), -math.cos(angle)
         tx, ty = math.cos(angle), math.sin(angle)
-        center = self._lane_center(approach, lane, g)
-        road_radius = g["road"] * 0.56
-        approach_margin = 115.0
-        stop_offset = 34.0
+        lane_count = max(1, self.lane_counts.get(approach, 1))
+        lane_offset = (lane - (lane_count + 1) / 2) * min(13.0, g["road"] * 0.035)
+        road_radius = g["road"] * 0.43
+        center = QPointF(g["cx"] + nx * road_radius - tx * lane_offset,
+                         g["cy"] + ny * road_radius - ty * lane_offset)
+        # Put the queue on the incoming arm, not in the junction.
+        approach_margin = max(100.0, g["road"] * 0.92)
+        stop_offset = g["road"] * 0.43
         start = QPointF(center.x() + nx * approach_margin, center.y() + ny * approach_margin)
         stop = QPointF(center.x() + nx * stop_offset, center.y() + ny * stop_offset)
-        entry = QPointF(g["cx"] + nx * road_radius - tx * ((lane - 0.5) / max(1, self.lane_counts.get(approach, 1)) * g["road"] * 0.24),
-                        g["cy"] + ny * road_radius - ty * ((lane - 0.5) / max(1, self.lane_counts.get(approach, 1)) * g["road"] * 0.24))
-        offsets = {"Прямо": 180, "Налево": 90, "Направо": -90}
-        exit_bearing = math.radians((bearing + offsets.get(turn, 180)) % 360)
-        ex, ey = math.sin(exit_bearing), -math.cos(exit_bearing)
-        etx, ety = math.cos(exit_bearing), math.sin(exit_bearing)
-        exit_side = min(self.lane_counts, key=lambda name: abs((self._approach_bearing(name) - math.degrees(exit_bearing) + 180) % 360 - 180))
+        stop_distance = math.hypot(stop.x() - start.x(), stop.y() - start.y())
+
+        turn_offsets = {"Прямо": 180, "Налево": 90, "Направо": -90}
+        exit_deg = (bearing + turn_offsets.get(turn, 180)) % 360
+        exit_angle = math.radians(exit_deg)
+        ex, ey = math.sin(exit_angle), -math.cos(exit_angle)
+        etx, ety = math.cos(exit_angle), math.sin(exit_angle)
+        # Choose the nearest real arm; on irregular junctions this avoids aiming
+        # for a nonexistent cardinal road and crossing the pavement edge.
+        arms = list(self.lane_counts) or [approach]
+        exit_side = min(arms, key=lambda name: abs((self._approach_bearing(name) - exit_deg + 180) % 360 - 180))
         exit_count = max(1, self.lane_counts.get(exit_side, 1))
-        exit_offset = (lane - 0.5) / exit_count * g["road"] * 0.24
-        end = QPointF(g["cx"] + ex * (max(g["w"], g["h"]) * 0.72) - etx * exit_offset,
-                      g["cy"] + ey * (max(g["w"], g["h"]) * 0.72) - ety * exit_offset)
+        exit_lane = min(exit_count, max(1, lane))
+        exit_offset = (exit_lane - (exit_count + 1) / 2) * min(13.0, g["road"] * 0.035)
+        # End the curve just beyond the visible road's end-cap, aligned to the
+        # selected arm so the whole vehicle stays on the asphalt while turning.
+        exit_radius = max(g["w"], g["h"]) * 0.66
+        end = QPointF(g["cx"] + ex * exit_radius - etx * exit_offset,
+                      g["cy"] + ey * exit_radius - ety * exit_offset)
         path = QPainterPath(start)
         path.lineTo(stop)
-        stop_distance = math.hypot(stop.x() - start.x(), stop.y() - start.y())
-        path.lineTo(entry)
-        c1 = QPointF(entry.x() + nx * g["road"] * 0.30, entry.y() + ny * g["road"] * 0.30)
-        c2 = QPointF(end.x() - ex * g["road"] * 0.30, end.y() - ey * g["road"] * 0.30)
+        # A pair of cubic curves gives a continuous tangent through the junction.
+        entry = QPointF(g["cx"] + nx * road_radius - tx * lane_offset,
+                        g["cy"] + ny * road_radius - ty * lane_offset)
+        c1 = QPointF(entry.x() - nx * g["road"] * 0.08 - tx * lane_offset,
+                     entry.y() - ny * g["road"] * 0.08 - ty * lane_offset)
+        c2 = QPointF(g["cx"] + ex * g["road"] * 0.16 - etx * exit_offset,
+                     g["cy"] + ey * g["road"] * 0.16 - ety * exit_offset)
         path.cubicTo(c1, c2, end)
         return path, stop_distance
 
@@ -557,47 +572,49 @@ class TrafficScene(QWidget):
             road_path = QPainterPath(QPointF(cx, cy))
             road_path.lineTo(endpoint)
             p.drawPath(road_path)
-        p.setPen(QPen(QColor("#e2e8f0"), 1, Qt.PenStyle.DashLine))
-        # Dashed lane markings on each approach.
+        # Lane separators are drawn radially for every configured arm. This
+        # keeps markings aligned on T, curved, five-arm and six-arm layouts.
+        from app.simulation.detailed import APPROACH_BEARINGS
         p.setPen(QPen(QColor("#b9c2ca"), 1, Qt.PenStyle.DashLine))
-        for approach in ("Север", "Юг"):
-            count = max(1, self.lane_counts.get(approach, 1))
+        for approach, count_value in self.lane_counts.items():
+            count = max(1, count_value)
+            bearing = math.radians(APPROACH_BEARINGS.get(approach, 0))
+            nx, ny = math.sin(bearing), -math.cos(bearing)
+            tx, ty = math.cos(bearing), math.sin(bearing)
+            inner = road * 0.47
+            outer = max(w, h) * 0.72
             for i in range(1, count):
-                x = (cx - road * i / (2 * count)) if approach == "Север" else (cx + road * i / (2 * count))
-                if approach == "Север":
-                    p.drawLine(int(x), 42, int(x), int(top))
-                else:
-                    p.drawLine(int(x), int(bottom), int(x), int(h - 42))
-        for approach in ("Запад", "Восток"):
-            count = max(1, self.lane_counts.get(approach, 1))
-            for i in range(1, count):
-                y = (cy + road * i / (2 * count)) if approach == "Запад" else (cy - road * i / (2 * count))
-                if approach == "Запад":
-                    p.drawLine(0, int(y), int(left), int(y))
-                else:
-                    p.drawLine(int(right), int(y), int(w), int(y))
-        # Center lines separate opposing directions.
+                offset = (i / count - 0.5) * road * 0.78
+                a = QPointF(cx + nx * inner - tx * offset, cy + ny * inner - ty * offset)
+                b = QPointF(cx + nx * outer - tx * offset, cy + ny * outer - ty * offset)
+                p.drawLine(a, b)
+        # Center/direction separator for each arm.
         p.setPen(QPen(QColor("#e2e8f0"), 1, Qt.PenStyle.DashLine))
-        p.drawLine(int(cx), 42, int(cx), int(top))
-        p.drawLine(int(cx), int(bottom), int(cx), int(h - 42))
-        p.drawLine(0, int(cy), int(left), int(cy))
-        p.drawLine(int(right), int(cy), int(w), int(cy))
-        # Crosswalks with zebra stripes and stop lines.
+        for approach in self.lane_counts:
+            bearing = math.radians(APPROACH_BEARINGS.get(approach, 0))
+            nx, ny = math.sin(bearing), -math.cos(bearing)
+            a = QPointF(cx + nx * road * 0.48, cy + ny * road * 0.48)
+            b = QPointF(cx + nx * max(w, h) * 0.72, cy + ny * max(w, h) * 0.72)
+            p.drawLine(a, b)
+        # Rotated zebra crossings and stop bars at each active approach.
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor("#f8fafc"))
-        stripe_count = 8
-        for i in range(stripe_count):
-            off = i * road / stripe_count
-            stripe = road / (stripe_count * 2)
-            p.drawRect(int(left + off), int(top - 25), int(stripe), 18)
-            p.drawRect(int(left + off), int(bottom + 7), int(stripe), 18)
-            p.drawRect(int(left - 25), int(top + off), 18, int(stripe))
-            p.drawRect(int(right + 7), int(top + off), 18, int(stripe))
-        p.setPen(QPen(QColor("#ffffff"), 3))
-        p.drawLine(int(left), int(top - 29), int(right), int(top - 29))
-        p.drawLine(int(left), int(bottom + 29), int(right), int(bottom + 29))
-        p.drawLine(int(left - 29), int(top), int(left - 29), int(bottom))
-        p.drawLine(int(right + 29), int(top), int(right + 29), int(bottom))
+        for approach in self.lane_counts:
+            bearing = math.radians(APPROACH_BEARINGS.get(approach, 0))
+            nx, ny = math.sin(bearing), -math.cos(bearing)
+            tx, ty = math.cos(bearing), math.sin(bearing)
+            inner = road * 0.49
+            outer = road * 0.66
+            p.save()
+            p.translate(cx, cy)
+            p.rotate(-math.degrees(bearing))
+            # In local coordinates the incoming arm points upward.
+            for i in range(8):
+                stripe_x = -road * 0.36 + i * road * 0.09
+                p.drawRect(int(stripe_x), int(-outer), int(road * 0.045), int(outer-inner))
+            p.setPen(QPen(QColor("#ffffff"), 3))
+            p.drawLine(int(-road*0.39), int(-inner), int(road*0.39), int(-inner))
+            p.restore()
         # Turn arrows sit in their actual lanes, facing the direction of travel.
         for approach in self.lane_counts:
             for lane in range(1, max(1, self.lane_counts.get(approach, 1)) + 1):
@@ -671,26 +688,26 @@ class TrafficScene(QWidget):
             p.setPen(QPen(QColor("#102033"), 1))
             p.setBrush(body)
             if kind == "car":
-                p.drawRoundedRect(-9, -4, 18, 8, 3, 3)
+                p.drawRoundedRect(-12, -5, 24, 10, 4, 4)
                 p.setBrush(QColor("#dbeafe")); p.drawRoundedRect(-4, -3, 7, 6, 2, 2)
             elif kind == "bus":
-                p.drawRoundedRect(-14, -5, 28, 10, 2, 2)
+                p.drawRoundedRect(-18, -6, 36, 12, 3, 3)
                 p.setBrush(QColor("#dbeafe"))
-                for x in (-9, -3, 3, 9): p.drawRect(x, -3, 3, 3)
+                for x in (-12, -6, 0, 6): p.drawRect(x, -4, 4, 4)
                 p.setBrush(QColor("#334155")); p.drawRect(9, -3, 3, 6)
             elif kind == "articulated_bus":
-                p.drawRoundedRect(-20, -5, 40, 10, 2, 2)
+                p.drawRoundedRect(-26, -6, 52, 12, 3, 3)
                 p.setBrush(QColor("#dbeafe"))
                 for x in (-15, -9, -3, 5, 11): p.drawRect(x, -3, 4, 3)
                 p.setBrush(QColor("#475569")); p.drawRect(1, -5, 3, 10)
                 p.setPen(QPen(QColor("#102033"), 1)); p.drawLine(2, -4, 2, 4)
             elif kind == "truck":
-                p.drawRoundedRect(-13, -5, 13, 10, 2, 2)
-                p.setBrush(QColor("#e2e8f0")); p.drawRect(0, -4, 13, 8)
+                p.drawRoundedRect(-17, -6, 17, 12, 3, 3)
+                p.setBrush(QColor("#e2e8f0")); p.drawRect(0, -5, 17, 10)
                 p.setBrush(QColor("#bae6fd")); p.drawRect(-10, -3, 4, 3)
             elif kind == "lorry":
-                p.drawRoundedRect(-17, -5, 10, 10, 2, 2)
-                p.setBrush(QColor("#e5e7eb")); p.drawRect(-7, -4, 23, 8)
+                p.drawRoundedRect(-22, -6, 13, 12, 3, 3)
+                p.setBrush(QColor("#e5e7eb")); p.drawRect(-9, -5, 29, 10)
                 p.setBrush(QColor("#bae6fd")); p.drawRect(-15, -3, 4, 3)
                 p.setBrush(QColor("#334155"))
                 for x in (-13, -3, 7, 13): p.drawEllipse(x, 4, 3, 3)
