@@ -30,41 +30,66 @@ class PedestrianDemand:
         return f"Пешеходы:{self.crossing}"
 
 
-_EXIT_SIDE = {
-    "Север": {"Прямо": "Юг", "Налево": "Восток", "Направо": "Запад"},
-    "Юг": {"Прямо": "Север", "Налево": "Запад", "Направо": "Восток"},
-    "Запад": {"Прямо": "Восток", "Налево": "Север", "Направо": "Юг"},
-    "Восток": {"Прямо": "Запад", "Налево": "Юг", "Направо": "Север"},
+APPROACH_BEARINGS = {
+    "Север": 0, "Северо-восток": 45, "Восток": 90, "Юго-восток": 135,
+    "Юг": 180, "Юго-запад": 225, "Запад": 270, "Северо-запад": 315,
 }
-_OPPOSITE = {"Север": "Юг", "Юг": "Север", "Запад": "Восток", "Восток": "Запад"}
+
+
+def _angle_difference(first, second):
+    return abs((first - second + 180) % 360 - 180)
+
+
+def movement_exit_bearing(movement):
+    """Approximate exit direction for a movement on a radial, multi-arm junction."""
+    bearing = APPROACH_BEARINGS.get(movement.approach)
+    if bearing is None:
+        return None
+    offsets = {"Прямо": 180, "Налево": 90, "Направо": -90}
+    if movement.turn not in offsets:
+        return None
+    return (bearing + offsets[movement.turn]) % 360
 
 
 def movement_exit_side(movement):
-    return _EXIT_SIDE.get(movement.approach, {}).get(movement.turn)
+    bearing = movement_exit_bearing(movement)
+    if bearing is None:
+        return None
+    return min(APPROACH_BEARINGS, key=lambda name: _angle_difference(bearing, APPROACH_BEARINGS[name]))
 
 
 def vehicle_movements_conflict(first, second):
-    """Conservative conflict rules for a schematic four-leg, right-hand-traffic junction."""
+    """Conservative radial conflict test for intersections with three to eight arms."""
     if first.approach == second.approach:
         return False
-    opposite_approaches = _OPPOSITE.get(first.approach) == second.approach
-    if opposite_approaches:
-        # Opposing left turns can cross the other vehicle's path.
+    first_bearing = APPROACH_BEARINGS.get(first.approach)
+    second_bearing = APPROACH_BEARINGS.get(second.approach)
+    if first_bearing is None or second_bearing is None:
+        return True
+    separation = _angle_difference(first_bearing, second_bearing)
+    if separation >= 155:
+        # Opposing/near-opposing left turns can cross one another.
         return first.turn == "Налево" or second.turn == "Налево"
-
-    # On perpendicular approaches, a right turn and a straight movement are
-    # treated as non-conflicting in this schematic model. A right turn versus
-    # a left turn or another right turn remains conservative/conflicting.
-    if first.turn == "Направо" and second.turn == "Прямо":
-        return False
-    if second.turn == "Направо" and first.turn == "Прямо":
-        return False
+    if 65 <= separation <= 115:
+        # A right turn and straight movement on near-perpendicular approaches
+        # are treated as non-conflicting; other combinations remain conservative.
+        if first.turn == "Направо" and second.turn == "Прямо":
+            return False
+        if second.turn == "Направо" and first.turn == "Прямо":
+            return False
+    # Diagonal and acute-angle interactions are conservative until surveyed
+    # trajectories are available; never assume a crossing movement is safe.
     return True
 
 
 def vehicle_pedestrian_conflict(vehicle, pedestrian):
-    return (vehicle.approach == pedestrian.crossing or
-            movement_exit_side(vehicle) == pedestrian.crossing)
+    vehicle_bearing = APPROACH_BEARINGS.get(vehicle.approach)
+    crossing_bearing = APPROACH_BEARINGS.get(pedestrian.crossing)
+    exit_bearing = movement_exit_bearing(vehicle)
+    if vehicle_bearing is None or crossing_bearing is None:
+        return True
+    return (_angle_difference(vehicle_bearing, crossing_bearing) <= 22.5 or
+            (exit_bearing is not None and _angle_difference(exit_bearing, crossing_bearing) <= 22.5))
 
 
 def resolve_phase_movements(active_ids, movements, pedestrians, signs=None):
