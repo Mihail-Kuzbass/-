@@ -820,7 +820,8 @@ class MainWindow(QMainWindow):
             return
         self.traffic_scene.configure(
             self.plan.phases, movements, pedestrians, self.plan.cycle_seconds,
-            {name: spin.value() for name, spin in self.lane_spins.items() if name in self._active_approaches()},\n            {key: value for key, value in self.lane_turns.items() if key[0] in self._active_approaches()},
+            {name: spin.value() for name, spin in self.lane_spins.items() if name in self._active_approaches()},
+            {key: value for key, value in self.lane_turns.items() if key[0] in self._active_approaches()},
             result=result, signs=self.traffic_scene.road_signs
         )
         self.detailed_results.setPlainText(result.report())
