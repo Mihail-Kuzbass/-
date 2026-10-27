@@ -417,8 +417,8 @@ class TrafficScene(QWidget):
         nx, ny = math.sin(bearing), -math.cos(bearing)
         tx, ty = math.cos(bearing), math.sin(bearing)
         radius = g["road"] * 0.56
-        return QPointF(g["cx"] + nx * radius - tx * offset,
-                       g["cy"] + ny * radius - ty * offset)
+        return QPointF(g["cx"] + nx * radius + tx * offset,
+                       g["cy"] + ny * radius + ty * offset)
 
     def _vehicle_path(self, approach, lane, turn):
         """Build a smooth lane-centred path that remains inside the paved arms."""
@@ -429,8 +429,8 @@ class TrafficScene(QWidget):
         tx, ty = math.cos(angle), math.sin(angle)
         lane_offset = self._lane_offset(approach, lane, g["road"])
         road_radius = g["road"] * 0.43
-        center = QPointF(g["cx"] + nx * road_radius - tx * lane_offset,
-                         g["cy"] + ny * road_radius - ty * lane_offset)
+        center = QPointF(g["cx"] + nx * road_radius + tx * lane_offset,
+                         g["cy"] + ny * road_radius + ty * lane_offset)
         # Put the queue on the incoming arm, not in the junction.
         approach_margin = max(100.0, g["road"] * 0.92)
         stop_offset = g["road"] * 0.43
@@ -460,17 +460,17 @@ class TrafficScene(QWidget):
         # End the curve just beyond the visible road's end-cap, aligned to the
         # selected arm so the whole vehicle stays on the asphalt while turning.
         exit_radius = max(g["w"], g["h"]) * 0.66
-        end = QPointF(g["cx"] + ex * exit_radius - etx * exit_offset,
-                      g["cy"] + ey * exit_radius - ety * exit_offset)
+        end = QPointF(g["cx"] + ex * exit_radius + etx * exit_offset,
+                      g["cy"] + ey * exit_radius + ety * exit_offset)
         path = QPainterPath(start)
         path.lineTo(stop)
         # A pair of cubic curves gives a continuous tangent through the junction.
-        entry = QPointF(g["cx"] + nx * road_radius - tx * lane_offset,
-                        g["cy"] + ny * road_radius - ty * lane_offset)
-        c1 = QPointF(entry.x() - nx * g["road"] * 0.08 - tx * lane_offset,
-                     entry.y() - ny * g["road"] * 0.08 - ty * lane_offset)
-        c2 = QPointF(g["cx"] + ex * g["road"] * 0.16 - etx * exit_offset,
-                     g["cy"] + ey * g["road"] * 0.16 - ety * exit_offset)
+        entry = QPointF(g["cx"] + nx * road_radius + tx * lane_offset,
+                        g["cy"] + ny * road_radius + ty * lane_offset)
+        c1 = QPointF(entry.x() - nx * g["road"] * 0.08,
+                     entry.y() - ny * g["road"] * 0.08)
+        c2 = QPointF(g["cx"] + ex * g["road"] * 0.16 + etx * exit_offset,
+                     g["cy"] + ey * g["road"] * 0.16 + ety * exit_offset)
         path.cubicTo(c1, c2, end)
         return path, stop_distance
 
@@ -639,8 +639,8 @@ class TrafficScene(QWidget):
             outer = max(w, h) * 0.72
             for i in range(1, count):
                 offset = (i / count - 0.5) * road * 0.78
-                a = QPointF(cx + nx * inner - tx * offset, cy + ny * inner - ty * offset)
-                b = QPointF(cx + nx * outer - tx * offset, cy + ny * outer - ty * offset)
+                a = QPointF(cx + nx * inner + tx * offset, cy + ny * inner + ty * offset)
+                b = QPointF(cx + nx * outer + tx * offset, cy + ny * outer + ty * offset)
                 p.drawLine(a, b)
         # Center/direction separator for each arm.
         p.setPen(QPen(QColor("#e2e8f0"), 1, Qt.PenStyle.DashLine))
@@ -698,8 +698,8 @@ class TrafficScene(QWidget):
                 lane_offset = self._lane_offset(approach, lane, road)
                 # Place each head beside its own lane, just upstream of the
                 # stop line; use the same centreline geometry as vehicle paths.
-                sx = cx + nx * road * 0.43 - tx * lane_offset + nx * 12
-                sy = cy + ny * road * 0.43 - ty * lane_offset + ny * 12
+                sx = cx + nx * road * 0.43 + tx * lane_offset + nx * 12
+                sy = cy + ny * road * 0.43 + ty * lane_offset + ny * 12
                 self._draw_signal_head(p, sx, sy, state, horizontal=abs(math.sin(bearing)) > 0.7)
         # Draw road signs as recognizable, full-size vector pictograms (not code-only icons).
         for sign in self.road_signs:
