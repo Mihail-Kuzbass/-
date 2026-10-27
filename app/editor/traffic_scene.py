@@ -383,13 +383,16 @@ class TrafficScene(QWidget):
         from app.simulation.detailed import APPROACH_BEARINGS
         return APPROACH_BEARINGS.get(approach, 0)
 
+    def _lane_offset(self, approach, lane, road_width):
+        """One shared lane-centre offset for vehicles, stop lines and signal heads."""
+        count = max(1, int(self.lane_counts.get(approach, 1)))
+        lane = min(count, max(1, int(lane)))
+        spacing = min(13.0, road_width * 0.035)
+        return (lane - (count + 1) / 2) * spacing
+
     def _lane_center(self, approach, lane, g):
-        import math
         bearing = math.radians(self._approach_bearing(approach))
-        count = max(1, self.lane_counts.get(approach, 1))
-        # Each arm has two traffic directions; lane positions stay on the
-        # right-hand half of the inbound carriageway.
-        offset = (lane - 0.5) / count * g["road"] * 0.24
+        offset = self._lane_offset(approach, lane, g["road"])
         nx, ny = math.sin(bearing), -math.cos(bearing)
         tx, ty = math.cos(bearing), math.sin(bearing)
         radius = g["road"] * 0.56
@@ -403,8 +406,7 @@ class TrafficScene(QWidget):
         angle = math.radians(bearing)
         nx, ny = math.sin(angle), -math.cos(angle)
         tx, ty = math.cos(angle), math.sin(angle)
-        lane_count = max(1, self.lane_counts.get(approach, 1))
-        lane_offset = (lane - (lane_count + 1) / 2) * min(13.0, g["road"] * 0.035)
+        lane_offset = self._lane_offset(approach, lane, g["road"])
         road_radius = g["road"] * 0.43
         center = QPointF(g["cx"] + nx * road_radius - tx * lane_offset,
                          g["cy"] + ny * road_radius - ty * lane_offset)
@@ -433,7 +435,7 @@ class TrafficScene(QWidget):
         etx, ety = math.cos(exit_angle), math.sin(exit_angle)
         exit_count = max(1, self.lane_counts.get(exit_side, 1))
         exit_lane = min(exit_count, max(1, lane))
-        exit_offset = (exit_lane - (exit_count + 1) / 2) * min(13.0, g["road"] * 0.035)
+        exit_offset = self._lane_offset(exit_side, exit_lane, g["road"])
         # End the curve just beyond the visible road's end-cap, aligned to the
         # selected arm so the whole vehicle stays on the asphalt while turning.
         exit_radius = max(g["w"], g["h"]) * 0.66
@@ -669,10 +671,14 @@ class TrafficScene(QWidget):
                 turns = self.lane_turns.get((approach, lane), self.TURNS)
                 states = [self._movement_state(f"{approach}:{lane}:{turn}", stage, active) for turn in turns]
                 state = "green" if "green" in states else "flash" if "flash" in states else "yellow" if "yellow" in states else "red"
-                pos = self._lane_center(approach, lane, g)
                 bearing = math.radians(self._approach_bearing(approach))
-                sx = cx + math.sin(bearing) * road * 0.58
-                sy = cy - math.cos(bearing) * road * 0.58
+                nx, ny = math.sin(bearing), -math.cos(bearing)
+                tx, ty = math.cos(bearing), math.sin(bearing)
+                lane_offset = self._lane_offset(approach, lane, road)
+                # Place each head beside its own lane, just upstream of the
+                # stop line; use the same centreline geometry as vehicle paths.
+                sx = cx + nx * road * 0.43 - tx * lane_offset + nx * 12
+                sy = cy + ny * road * 0.43 - ty * lane_offset + ny * 12
                 self._draw_signal_head(p, sx, sy, state, horizontal=abs(math.sin(bearing)) > 0.7)
         # Draw road signs as recognizable, full-size vector pictograms (not code-only icons).
         for sign in self.road_signs:
@@ -778,9 +784,31 @@ class TrafficScene(QWidget):
                 x, y = left - 35, cy
             else:
                 x, y = right + 35, cy
+            # Pedestrian signal: dark housing plus a distinct person glyph.
+            # Avoid the ambiguous persistent red square from the previous painter.
+            p.save()
             p.setPen(QPen(QColor("#111827"), 1))
-            p.setBrush(self.COLORS.get(state, self.COLORS["red"]))
-            p.drawRoundedRect(int(x - 5), int(y - 5), 10, 10, 2, 2)
+            p.setBrush(QColor("#111827"))
+            p.drawRoundedRect(int(x - 8), int(y - 12), 16, 24, 3, 3)
+            is_green = state in ("green", "flash")
+            lamp = QColor("#22c55e") if is_green else QColor("#ef4444")
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(lamp)
+            p.drawEllipse(int(x - 5), int(y - 9), 10, 10)
+            p.setPen(QPen(QColor("#f8fafc"), 2))
+            p.drawEllipse(int(x - 1), int(y - 7), 2, 2)
+            p.drawLine(int(x), int(y - 4), int(x), int(y + 1))
+            if is_green:
+                p.drawLine(int(x), int(y - 2), int(x - 3), int(y + 1))
+                p.drawLine(int(x), int(y - 2), int(x + 3), int(y))
+                p.drawLine(int(x), int(y + 1), int(x - 3), int(y + 5))
+                p.drawLine(int(x), int(y + 1), int(x + 3), int(y + 5))
+            else:
+                p.drawLine(int(x), int(y - 2), int(x - 3), int(y + 1))
+                p.drawLine(int(x), int(y - 2), int(x + 3), int(y + 1))
+                p.drawLine(int(x), int(y + 1), int(x - 3), int(y + 5))
+                p.drawLine(int(x), int(y + 1), int(x + 3), int(y + 5))
+            p.restore()
         p.setPen(QColor("#172033"))
         p.setFont(QFont("Segoe UI", 8))
         footer = ("Воспроизведение событий расчёта" if self.replay_mode else "Демонстрационная анимация") + " · схема условная, не натурная геометрия"
