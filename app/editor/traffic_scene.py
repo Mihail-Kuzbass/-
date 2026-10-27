@@ -354,65 +354,53 @@ class TrafficScene(QWidget):
         return {"w": w, "h": h, "cx": cx, "cy": cy, "road": road_w,
                 "left": left, "right": right, "top": top, "bottom": bottom}
 
+    def _approach_bearing(self, approach):
+        from app.simulation.detailed import APPROACH_BEARINGS
+        return APPROACH_BEARINGS.get(approach, 0)
+
     def _lane_center(self, approach, lane, g):
+        import math
+        bearing = math.radians(self._approach_bearing(approach))
         count = max(1, self.lane_counts.get(approach, 1))
-        pos = (lane - 0.5) / count
-        # Right-hand traffic: viewed in the direction of travel, vehicles keep
-        # to their right side of the road. Opposing flows occupy separate halves.
-        if approach == "Север":       # southbound: driver's right is screen-left
-            return QPointF(g["cx"] - pos * g["road"] / 2, g["top"])
-        if approach == "Юг":          # northbound: driver's right is screen-right
-            return QPointF(g["cx"] + pos * g["road"] / 2, g["bottom"])
-        if approach == "Запад":       # eastbound: driver's right is screen-bottom
-            return QPointF(g["left"], g["cy"] + pos * g["road"] / 2)
-        return QPointF(g["right"], g["cy"] - pos * g["road"] / 2)  # westbound
+        # Each arm has two traffic directions; lane positions stay on the
+        # right-hand half of the inbound carriageway.
+        offset = (lane - 0.5) / count * g["road"] * 0.24
+        nx, ny = math.cos(bearing), math.sin(bearing)
+        tx, ty = -ny, nx
+        radius = g["road"] * 0.56
+        return QPointF(g["cx"] + nx * radius - tx * offset,
+                       g["cy"] + ny * radius - ty * offset)
 
     def _vehicle_path(self, approach, lane, turn):
+        import math
         g = self._layout()
+        bearing = self._approach_bearing(approach)
+        angle = math.radians(bearing)
+        nx, ny = math.cos(angle), math.sin(angle)
+        tx, ty = -ny, nx
         center = self._lane_center(approach, lane, g)
-        cx, cy, left, right, top, bottom = (g[k] for k in ("cx", "cy", "left", "right", "top", "bottom"))
-        exit_margin = 95.0
+        road_radius = g["road"] * 0.56
         approach_margin = 115.0
         stop_offset = 34.0
-        if approach == "Север":
-            start = QPointF(center.x(), top - approach_margin)
-            stop = QPointF(center.x(), top - stop_offset)
-            entry = QPointF(center.x(), top)
-            exit_side = {"Прямо": "Юг", "Налево": "Восток", "Направо": "Запад"}[turn]
-        elif approach == "Юг":
-            start = QPointF(center.x(), bottom + approach_margin)
-            stop = QPointF(center.x(), bottom + stop_offset)
-            entry = QPointF(center.x(), bottom)
-            exit_side = {"Прямо": "Север", "Налево": "Запад", "Направо": "Восток"}[turn]
-        elif approach == "Запад":
-            start = QPointF(left - approach_margin, center.y())
-            stop = QPointF(left - stop_offset, center.y())
-            entry = QPointF(left, center.y())
-            exit_side = {"Прямо": "Восток", "Налево": "Север", "Направо": "Юг"}[turn]
-        else:
-            start = QPointF(right + approach_margin, center.y())
-            stop = QPointF(right + stop_offset, center.y())
-            entry = QPointF(right, center.y())
-            exit_side = {"Прямо": "Запад", "Налево": "Юг", "Направо": "Север"}[turn]
-        exit_pos = (lane - 0.5) / max(1, self.lane_counts.get(exit_side, 1))
-        # Match the destination approach's right-hand lane half as well.
-        if exit_side == "Юг":          # southbound exit uses the west/left half
-            end = QPointF(cx - exit_pos * g["road"] / 2, g["h"] + exit_margin)
-        elif exit_side == "Север":     # northbound exit uses the east/right half
-            end = QPointF(cx + exit_pos * g["road"] / 2, -exit_margin)
-        elif exit_side == "Восток":    # eastbound exit uses the south/bottom half
-            end = QPointF(g["w"] + exit_margin, cy + exit_pos * g["road"] / 2)
-        else:                          # westbound exit uses the north/top half
-            end = QPointF(-exit_margin, cy - exit_pos * g["road"] / 2)
+        start = QPointF(center.x() + nx * approach_margin, center.y() + ny * approach_margin)
+        stop = QPointF(center.x() + nx * stop_offset, center.y() + ny * stop_offset)
+        entry = QPointF(g["cx"] + nx * road_radius - tx * ((lane - 0.5) / max(1, self.lane_counts.get(approach, 1)) * g["road"] * 0.24),
+                        g["cy"] + ny * road_radius - ty * ((lane - 0.5) / max(1, self.lane_counts.get(approach, 1)) * g["road"] * 0.24))
+        offsets = {"Прямо": 180, "Налево": 90, "Направо": -90}
+        exit_bearing = math.radians((bearing + offsets.get(turn, 180)) % 360)
+        ex, ey = math.cos(exit_bearing), math.sin(exit_bearing)
+        etx, ety = -ey, ex
+        exit_side = min(self.lane_counts, key=lambda name: abs((self._approach_bearing(name) - math.degrees(exit_bearing) + 180) % 360 - 180))
+        exit_count = max(1, self.lane_counts.get(exit_side, 1))
+        exit_offset = (lane - 0.5) / exit_count * g["road"] * 0.24
+        end = QPointF(g["cx"] + ex * (max(g["w"], g["h"]) * 0.72) - etx * exit_offset,
+                      g["cy"] + ey * (max(g["w"], g["h"]) * 0.72) - ety * exit_offset)
         path = QPainterPath(start)
         path.lineTo(stop)
-        stop_distance = hypot(stop.x() - start.x(), stop.y() - start.y())
+        stop_distance = math.hypot(stop.x() - start.x(), stop.y() - start.y())
         path.lineTo(entry)
-        if approach == exit_side:
-            path.lineTo(end)
-            return path, stop_distance
-        c1 = QPointF(entry.x(), cy) if approach in ("Север", "Юг") else QPointF(cx, entry.y())
-        c2 = QPointF(end.x(), cy) if exit_side in ("Север", "Юг") else QPointF(cx, end.y())
+        c1 = QPointF(entry.x() + nx * g["road"] * 0.30, entry.y() + ny * g["road"] * 0.30)
+        c2 = QPointF(end.x() - ex * g["road"] * 0.30, end.y() - ey * g["road"] * 0.30)
         path.cubicTo(c1, c2, end)
         return path, stop_distance
 
