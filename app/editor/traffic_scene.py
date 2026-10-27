@@ -5,6 +5,7 @@ the entire marked crossing. This remains a visual teaching model, not calibrated
 microsimulation or a substitute for a surveyed intersection plan.
 """
 from math import hypot
+import math
 from PySide6.QtCore import Qt, QTimer, QPointF
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPainterPath
 from PySide6.QtWidgets import QWidget, QMenu
@@ -406,25 +407,16 @@ class TrafficScene(QWidget):
 
     def _pedestrian_path(self, crossing):
         g = self._layout()
-        cx, cy, left, right, top, bottom, road = (g[k] for k in ("cx", "cy", "left", "right", "top", "bottom", "road"))
-        margin = 30.0
-        path = QPainterPath()
-        if crossing == "Север":
-            # North-leg crosswalk runs left-to-right across the north approach.
-            path.moveTo(left - margin, top - 16)
-            path.lineTo(right + margin, top - 16)
-        elif crossing == "Юг":
-            # South-leg crosswalk runs right-to-left across the south approach.
-            path.moveTo(right + margin, bottom + 16)
-            path.lineTo(left - margin, bottom + 16)
-        elif crossing == "Запад":
-            # West-leg crosswalk runs from the lower curb to the upper curb.
-            path.moveTo(left - 16, bottom + margin)
-            path.lineTo(left - 16, top - margin)
-        else:
-            # East-leg crosswalk runs from the upper curb to the lower curb.
-            path.moveTo(right + 16, top - margin)
-            path.lineTo(right + 16, bottom + margin)
+        from app.simulation.detailed import APPROACH_BEARINGS
+        bearing = math.radians(APPROACH_BEARINGS.get(crossing, 0))
+        nx, ny = math.cos(bearing), math.sin(bearing)
+        tx, ty = -ny, nx
+        radius = g["road"] * 0.63
+        half_width = g["road"] * 0.42
+        cx, cy = g["cx"], g["cy"]
+        center_x, center_y = cx + nx * radius, cy + ny * radius
+        path = QPainterPath(QPointF(center_x - tx * half_width, center_y - ty * half_width))
+        path.lineTo(QPointF(center_x + tx * half_width, center_y + ty * half_width))
         return path
 
     def _point_at(self, item):
@@ -611,37 +603,29 @@ class TrafficScene(QWidget):
             for lane in range(1, max(1, self.lane_counts.get(approach, 1)) + 1):
                 pos = self._lane_center(approach, lane, g)
                 turns = self.lane_turns.get((approach, lane), self.TURNS)
-                if approach == "Север":
-                    x, y = pos.x(), top - 50
-                elif approach == "Юг":
-                    x, y = pos.x(), bottom + 52
-                elif approach == "Запад":
-                    x, y = left - 52, pos.y()
-                else:
-                    x, y = right + 52, pos.y()
+                bearing = math.radians(self._approach_bearing(approach))
+                x = cx + math.sin(bearing) * road * 0.76
+                y = cy - math.cos(bearing) * road * 0.76
                 glyphs = self.TURN_GLYPHS.get(approach, {"Прямо": "↑", "Налево": "↶", "Направо": "↷"})
                 for j, turn in enumerate(turns):
                     movement_state = self._movement_state(f"{approach}:{lane}:{turn}", stage, active)
                     arrow_color = self.COLORS.get(movement_state, self.COLORS["red"])
-                    self._draw_arrow(p, x + (j - (len(turns)-1)/2) * 17 if approach in ("Север", "Юг") else x,
-                                     y if approach in ("Север", "Юг") else y + (j - (len(turns)-1)/2) * 17,
+                    tangent_x, tangent_y = math.cos(bearing), math.sin(bearing)
+                    offset = (j - (len(turns)-1)/2) * 17
+                    self._draw_arrow(p, x + tangent_x * offset, y + tangent_y * offset,
                                      glyphs.get(turn, "·"), arrow_color)
         # Signal heads are installed at the stop line, one per lane/approach.
-        for approach in self.APPROACHES:
+        for approach in self.lane_counts:
             count = max(1, self.lane_counts.get(approach, 1))
             for lane in range(1, count + 1):
                 turns = self.lane_turns.get((approach, lane), self.TURNS)
                 states = [self._movement_state(f"{approach}:{lane}:{turn}", stage, active) for turn in turns]
                 state = "green" if "green" in states else "flash" if "flash" in states else "yellow" if "yellow" in states else "red"
                 pos = self._lane_center(approach, lane, g)
-                if approach == "Север":
-                    self._draw_signal_head(p, pos.x(), top - 12, state)
-                elif approach == "Юг":
-                    self._draw_signal_head(p, pos.x(), bottom + 12, state)
-                elif approach == "Запад":
-                    self._draw_signal_head(p, left - 12, pos.y(), state, horizontal=True)
-                else:
-                    self._draw_signal_head(p, right + 12, pos.y(), state, horizontal=True)
+                bearing = math.radians(self._approach_bearing(approach))
+                sx = cx + math.sin(bearing) * road * 0.58
+                sy = cy - math.cos(bearing) * road * 0.58
+                self._draw_signal_head(p, sx, sy, state, horizontal=abs(math.sin(bearing)) > 0.7)
         # Draw road signs as recognizable, full-size vector pictograms (not code-only icons).
         for sign in self.road_signs:
             approach, code = sign.get("approach"), sign.get("code", "")
