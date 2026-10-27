@@ -130,15 +130,23 @@ class TrafficScene(QWidget):
             for index, vehicle in enumerate(waiting):
                 vehicle["stop_distance"] = vehicle.get("base_stop_distance", vehicle["stop_distance"]) - 24.0 * index
         for vehicle in self.vehicles:
-            # Cars approach even on red, stop at the stop line, and only enter
-            # when the matching movement has a service/release event.
+            # Fixed-step style motion: accelerate smoothly, brake toward the stop line,
+            # and never advance past it until a release/service event is received.
+            target_speed = 46.0
+            remaining = vehicle["stop_distance"] - vehicle["distance"]
+            released = vehicle.get("released", False)
+            if not released and remaining <= max(5.0, vehicle["speed"] * 0.9):
+                target_speed = 0.0
+            acceleration = 34.0 if target_speed > vehicle["speed"] else 70.0
+            delta = max(-acceleration * dt, min(acceleration * dt, target_speed - vehicle["speed"]))
+            vehicle["speed"] = max(0.0, vehicle["speed"] + delta)
             proposed = vehicle["distance"] + vehicle["speed"] * dt
-            if vehicle["distance"] < vehicle["stop_distance"]:
+            if not released:
                 vehicle["distance"] = min(proposed, vehicle["stop_distance"])
-            elif vehicle.get("released", False):
-                vehicle["distance"] = proposed
+                if vehicle["distance"] >= vehicle["stop_distance"] - 0.5:
+                    vehicle["speed"] = 0.0
             else:
-                vehicle["distance"] = vehicle["stop_distance"]
+                vehicle["distance"] = proposed
         self.vehicles = [v for v in self.vehicles if v["distance"] < v["length"]]
         for walker in self.walkers:
             if walker.get("released", True):
@@ -642,11 +650,16 @@ class TrafficScene(QWidget):
             pt = self._point_at(vehicle)
             p.save()
             p.translate(pt)
-            horizontal = vehicle["key"].startswith(("Восток:", "Запад:"))
-            if horizontal:
-                p.rotate(0)
-            else:
-                p.rotate(90)
+            # Orient the vehicle to the local tangent of its path. This makes the
+            # body rotate continuously through left/right turns instead of snapping.
+            path = vehicle["path"]
+            length = max(1.0, vehicle["length"])
+            d = max(0.0, min(length, vehicle["distance"]))
+            p0 = path.pointAtPercent(path.percentAtLength(max(0.0, d - 2.0)))
+            p1 = path.pointAtPercent(path.percentAtLength(min(length, d + 2.0)))
+            from math import atan2, degrees
+            angle = degrees(atan2(p1.y() - p0.y(), p1.x() - p0.x()))
+            p.rotate(angle)
             kind = vehicle.get("vehicle_type", "car")
             colors = {
                 "car": QColor("#38bdf8"), "bus": QColor("#f59e0b"),
