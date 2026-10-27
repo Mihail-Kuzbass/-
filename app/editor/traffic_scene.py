@@ -433,7 +433,7 @@ class TrafficScene(QWidget):
                          g["cy"] + ny * road_radius + ty * lane_offset)
         # Put the queue on the incoming arm, not in the junction.
         approach_margin = max(100.0, g["road"] * 0.92)
-        stop_offset = g["road"] * 0.43
+        # Keep the stop line near the junction edge; adding another 0.43 road\n        # width to the lane-centre anchor placed it far outside the junction.\n        stop_offset = g["road"] * 0.12
         start = QPointF(center.x() + nx * approach_margin, center.y() + ny * approach_margin)
         stop = QPointF(center.x() + nx * stop_offset, center.y() + ny * stop_offset)
         stop_distance = math.hypot(stop.x() - start.x(), stop.y() - start.y())
