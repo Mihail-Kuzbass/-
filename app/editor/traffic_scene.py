@@ -186,6 +186,9 @@ class TrafficScene(QWidget):
                 demand = next((m for m in self.movements if m.movement_id == key), None)
                 if demand is not None:
                     path, base_stop_distance = self._vehicle_path(demand.approach, demand.lane, demand.turn)
+                    if path is None:
+                        self.event_cursor += 1
+                        continue
                     # Keep vehicles in a real queue: each follower starts and stops
                     # one vehicle length behind the preceding car in the same movement.
                     queued = sum(1 for v in self.vehicles if v["key"] == key
@@ -308,7 +311,7 @@ class TrafficScene(QWidget):
                 interval = max(1.25, 3600.0 / rate)
                 if self.spawn_clock[key] >= interval and not any(v["key"] == key and v["distance"] < 42 for v in self.vehicles):
                     path, stop_distance = self._vehicle_path(demand.approach, demand.lane, demand.turn)
-                    length = path.length()
+                    length = path.length() if path is not None else 0
                     if length > 0:
                         self.vehicles.append({"key": key, "path": path, "distance": 0.0,
                                               "length": length, "base_stop_distance": stop_distance,
@@ -414,13 +417,20 @@ class TrafficScene(QWidget):
 
         turn_offsets = {"Прямо": 180, "Налево": 90, "Направо": -90}
         exit_deg = (bearing + turn_offsets.get(turn, 180)) % 360
+        # Select only a configured arm matching the requested movement. Never
+        # silently redirect traffic onto an unrelated arm at a T/multi-arm junction.
+        arms = list(self.lane_counts)
+        if not arms:
+            return None, stop_distance
+        def angle_delta(a, b):
+            return abs((a - b + 180) % 360 - 180)
+        exit_side = min(arms, key=lambda name: angle_delta(self._approach_bearing(name), exit_deg))
+        if angle_delta(self._approach_bearing(exit_side), exit_deg) > 30:
+            return None, stop_distance
+        exit_deg = self._approach_bearing(exit_side)
         exit_angle = math.radians(exit_deg)
         ex, ey = math.sin(exit_angle), -math.cos(exit_angle)
         etx, ety = math.cos(exit_angle), math.sin(exit_angle)
-        # Choose the nearest real arm; on irregular junctions this avoids aiming
-        # for a nonexistent cardinal road and crossing the pavement edge.
-        arms = list(self.lane_counts) or [approach]
-        exit_side = min(arms, key=lambda name: abs((self._approach_bearing(name) - exit_deg + 180) % 360 - 180))
         exit_count = max(1, self.lane_counts.get(exit_side, 1))
         exit_lane = min(exit_count, max(1, lane))
         exit_offset = (exit_lane - (exit_count + 1) / 2) * min(13.0, g["road"] * 0.035)
