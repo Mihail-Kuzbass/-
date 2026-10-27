@@ -3,7 +3,7 @@ name: TrafficSignalStudio Windows Build
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, fix/traffic-routing-signals]
 
 concurrency:
   group: traffic-signal-studio-windows-${{ github.ref }}

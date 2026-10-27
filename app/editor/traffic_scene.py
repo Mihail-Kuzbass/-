@@ -78,6 +78,8 @@ class TrafficScene(QWidget):
         self.ped_spawn_clock.clear()
         self.playback_events = sorted((getattr(result, "events", None) or []), key=lambda e: (e["time"], 0 if e["kind"].endswith("arrival") else 1))
         self.event_cursor = 0
+        self.pending_vehicle_services = []
+        self.pending_pedestrian_services = []
         self.replay_mode = result is not None
         self.update()
 
@@ -102,6 +104,8 @@ class TrafficScene(QWidget):
         self.spawn_clock.clear()
         self.ped_spawn_clock.clear()
         self.event_cursor = 0
+        self.pending_vehicle_services = []
+        self.pending_pedestrian_services = []
         self.update()
 
     def _advance(self):
@@ -120,6 +124,8 @@ class TrafficScene(QWidget):
             stage, active = self._stage(), self._active_ids()
             self._spawn_eligible(stage, active, dt)
         stage, active = self._stage(), self._active_ids()
+        self._release_pending_vehicle_services(stage, active)
+        self._release_pending_pedestrian_services(stage, active)
         # Re-pack waiting cars as the queue discharges; a follower advances
         # toward the stop line when the car ahead enters the junction.
         by_movement = {}
@@ -183,6 +189,9 @@ class TrafficScene(QWidget):
                 demand = next((m for m in self.movements if m.movement_id == key), None)
                 if demand is not None:
                     path, base_stop_distance = self._vehicle_path(demand.approach, demand.lane, demand.turn)
+                    if path is None:
+                        self.event_cursor += 1
+                        continue
                     # Keep vehicles in a real queue: each follower starts and stops
                     # one vehicle length behind the preceding car in the same movement.
                     queued = sum(1 for v in self.vehicles if v["key"] == key
@@ -196,12 +205,11 @@ class TrafficScene(QWidget):
                                           "speed": 46.0, "turn": demand.turn, "vehicle_type": vehicle_type,
                                           "released": False})
             elif event["kind"] == "vehicle_served":
-                vehicle = next((v for v in self.vehicles if v["key"] == key and not v.get("released", False)
-                                and v["distance"] >= v["stop_distance"] - 1.0), None)
-                if vehicle is None:
-                    vehicle = next((v for v in self.vehicles if v["key"] == key and not v.get("released", False)), None)
-                if vehicle is not None:
-                    vehicle["released"] = True
+                # The aggregate model can serve a vehicle before the animation
+                # reaches its stop line. Queue the event; release only on green.
+                pending = getattr(self, "pending_vehicle_services", [])
+                pending.append(key)
+                self.pending_vehicle_services = pending
             elif event["kind"] == "pedestrian_arrival":
                 demand = next((p for p in self.pedestrians if p.movement_id == key), None)
                 if demand is not None:
@@ -210,10 +218,47 @@ class TrafficScene(QWidget):
                                          "length": path.length(), "speed": 48.0,
                                          "style": self.event_cursor % 3, "released": False})
             elif event["kind"] == "pedestrian_served":
-                walker = next((v for v in self.walkers if v["key"] == key and not v.get("released", False)), None)
-                if walker is not None:
-                    walker["released"] = True
+                pending = getattr(self, "pending_pedestrian_services", [])
+                pending.append(key)
+                self.pending_pedestrian_services = pending
             self.event_cursor += 1
+
+    def _release_pending_vehicle_services(self, stage, active):
+        """Release replay vehicles only when their movement has a permissive signal."""
+        if stage not in ("green", "flash"):
+            return
+        pending = getattr(self, "pending_vehicle_services", [])
+        remaining = []
+        for key in pending:
+            if key not in active:
+                remaining.append(key)
+                continue
+            vehicle = next((v for v in self.vehicles
+                            if v["key"] == key and not v.get("released", False)
+                            and v["distance"] >= v["stop_distance"] - 1.0), None)
+            if vehicle is None:
+                remaining.append(key)
+            else:
+                vehicle["released"] = True
+        self.pending_vehicle_services = remaining
+
+    def _release_pending_pedestrian_services(self, stage, active):
+        """Release waiting pedestrians only when their crossing signal is permissive."""
+        if stage not in ("green", "flash"):
+            return
+        pending = getattr(self, "pending_pedestrian_services", [])
+        remaining = []
+        for key in pending:
+            if key not in active:
+                remaining.append(key)
+                continue
+            walker = next((v for v in self.walkers
+                           if v["key"] == key and not v.get("released", False)), None)
+            if walker is None:
+                remaining.append(key)
+            else:
+                walker["released"] = True
+        self.pending_pedestrian_services = remaining
 
     @staticmethod
     def _vehicle_type_for_index(index):
@@ -287,7 +332,7 @@ class TrafficScene(QWidget):
                 interval = max(1.25, 3600.0 / rate)
                 if self.spawn_clock[key] >= interval and not any(v["key"] == key and v["distance"] < 42 for v in self.vehicles):
                     path, stop_distance = self._vehicle_path(demand.approach, demand.lane, demand.turn)
-                    length = path.length()
+                    length = path.length() if path is not None else 0
                     if length > 0:
                         self.vehicles.append({"key": key, "path": path, "distance": 0.0,
                                               "length": length, "base_stop_distance": stop_distance,
@@ -359,18 +404,21 @@ class TrafficScene(QWidget):
         from app.simulation.detailed import APPROACH_BEARINGS
         return APPROACH_BEARINGS.get(approach, 0)
 
+    def _lane_offset(self, approach, lane, road_width):
+        """One shared lane-centre offset for vehicles, stop lines and signal heads."""
+        count = max(1, int(self.lane_counts.get(approach, 1)))
+        lane = min(count, max(1, int(lane)))
+        spacing = min(13.0, road_width * 0.035)
+        return (lane - (count + 1) / 2) * spacing
+
     def _lane_center(self, approach, lane, g):
-        import math
         bearing = math.radians(self._approach_bearing(approach))
-        count = max(1, self.lane_counts.get(approach, 1))
-        # Each arm has two traffic directions; lane positions stay on the
-        # right-hand half of the inbound carriageway.
-        offset = (lane - 0.5) / count * g["road"] * 0.24
+        offset = self._lane_offset(approach, lane, g["road"])
         nx, ny = math.sin(bearing), -math.cos(bearing)
         tx, ty = math.cos(bearing), math.sin(bearing)
         radius = g["road"] * 0.56
-        return QPointF(g["cx"] + nx * radius - tx * offset,
-                       g["cy"] + ny * radius - ty * offset)
+        return QPointF(g["cx"] + nx * radius + tx * offset,
+                       g["cy"] + ny * radius + ty * offset)
 
     def _vehicle_path(self, approach, lane, turn):
         """Build a smooth lane-centred path that remains inside the paved arms."""
@@ -379,44 +427,50 @@ class TrafficScene(QWidget):
         angle = math.radians(bearing)
         nx, ny = math.sin(angle), -math.cos(angle)
         tx, ty = math.cos(angle), math.sin(angle)
-        lane_count = max(1, self.lane_counts.get(approach, 1))
-        lane_offset = (lane - (lane_count + 1) / 2) * min(13.0, g["road"] * 0.035)
+        lane_offset = self._lane_offset(approach, lane, g["road"])
         road_radius = g["road"] * 0.43
-        center = QPointF(g["cx"] + nx * road_radius - tx * lane_offset,
-                         g["cy"] + ny * road_radius - ty * lane_offset)
+        center = QPointF(g["cx"] + nx * road_radius + tx * lane_offset,
+                         g["cy"] + ny * road_radius + ty * lane_offset)
         # Put the queue on the incoming arm, not in the junction.
         approach_margin = max(100.0, g["road"] * 0.92)
-        stop_offset = g["road"] * 0.43
+        # Keep the stop line near the junction edge; adding another 0.43 road\n        # width to the lane-centre anchor placed it far outside the junction.\n        stop_offset = g["road"] * 0.12
         start = QPointF(center.x() + nx * approach_margin, center.y() + ny * approach_margin)
         stop = QPointF(center.x() + nx * stop_offset, center.y() + ny * stop_offset)
         stop_distance = math.hypot(stop.x() - start.x(), stop.y() - start.y())
 
         turn_offsets = {"Прямо": 180, "Налево": 90, "Направо": -90}
         exit_deg = (bearing + turn_offsets.get(turn, 180)) % 360
+        # Select only a configured arm matching the requested movement. Never
+        # silently redirect traffic onto an unrelated arm at a T/multi-arm junction.
+        arms = list(self.lane_counts)
+        if not arms:
+            return None, stop_distance
+        def angle_delta(a, b):
+            return abs((a - b + 180) % 360 - 180)
+        exit_side = min(arms, key=lambda name: angle_delta(self._approach_bearing(name), exit_deg))
+        if angle_delta(self._approach_bearing(exit_side), exit_deg) > 30:
+            return None, stop_distance
+        exit_deg = self._approach_bearing(exit_side)
         exit_angle = math.radians(exit_deg)
         ex, ey = math.sin(exit_angle), -math.cos(exit_angle)
         etx, ety = math.cos(exit_angle), math.sin(exit_angle)
-        # Choose the nearest real arm; on irregular junctions this avoids aiming
-        # for a nonexistent cardinal road and crossing the pavement edge.
-        arms = list(self.lane_counts) or [approach]
-        exit_side = min(arms, key=lambda name: abs((self._approach_bearing(name) - exit_deg + 180) % 360 - 180))
         exit_count = max(1, self.lane_counts.get(exit_side, 1))
         exit_lane = min(exit_count, max(1, lane))
-        exit_offset = (exit_lane - (exit_count + 1) / 2) * min(13.0, g["road"] * 0.035)
+        exit_offset = self._lane_offset(exit_side, exit_lane, g["road"])
         # End the curve just beyond the visible road's end-cap, aligned to the
         # selected arm so the whole vehicle stays on the asphalt while turning.
         exit_radius = max(g["w"], g["h"]) * 0.66
-        end = QPointF(g["cx"] + ex * exit_radius - etx * exit_offset,
-                      g["cy"] + ey * exit_radius - ety * exit_offset)
+        end = QPointF(g["cx"] + ex * exit_radius + etx * exit_offset,
+                      g["cy"] + ey * exit_radius + ety * exit_offset)
         path = QPainterPath(start)
         path.lineTo(stop)
-        # A pair of cubic curves gives a continuous tangent through the junction.
-        entry = QPointF(g["cx"] + nx * road_radius - tx * lane_offset,
-                        g["cy"] + ny * road_radius - ty * lane_offset)
-        c1 = QPointF(entry.x() - nx * g["road"] * 0.08 - tx * lane_offset,
-                     entry.y() - ny * g["road"] * 0.08 - ty * lane_offset)
-        c2 = QPointF(g["cx"] + ex * g["road"] * 0.16 - etx * exit_offset,
-                     g["cy"] + ey * g["road"] * 0.16 - ety * exit_offset)
+        # Build one continuous cubic from the stop line to the selected exit.
+        # The first control point must lie INSIDE the junction; placing it behind
+        # the stop line makes the vehicle initially reverse or kink before turning.
+        c1 = QPointF(stop.x() - nx * g["road"] * 0.18 - tx * lane_offset * 0.15,
+                     stop.y() - ny * g["road"] * 0.18 - ty * lane_offset * 0.15)
+        c2 = QPointF(g["cx"] + ex * g["road"] * 0.18 + etx * exit_offset,
+                     g["cy"] + ey * g["road"] * 0.18 + ety * exit_offset)
         path.cubicTo(c1, c2, end)
         return path, stop_distance
 
@@ -585,8 +639,8 @@ class TrafficScene(QWidget):
             outer = max(w, h) * 0.72
             for i in range(1, count):
                 offset = (i / count - 0.5) * road * 0.78
-                a = QPointF(cx + nx * inner - tx * offset, cy + ny * inner - ty * offset)
-                b = QPointF(cx + nx * outer - tx * offset, cy + ny * outer - ty * offset)
+                a = QPointF(cx + nx * inner + tx * offset, cy + ny * inner + ty * offset)
+                b = QPointF(cx + nx * outer + tx * offset, cy + ny * outer + ty * offset)
                 p.drawLine(a, b)
         # Center/direction separator for each arm.
         p.setPen(QPen(QColor("#e2e8f0"), 1, Qt.PenStyle.DashLine))
@@ -638,10 +692,14 @@ class TrafficScene(QWidget):
                 turns = self.lane_turns.get((approach, lane), self.TURNS)
                 states = [self._movement_state(f"{approach}:{lane}:{turn}", stage, active) for turn in turns]
                 state = "green" if "green" in states else "flash" if "flash" in states else "yellow" if "yellow" in states else "red"
-                pos = self._lane_center(approach, lane, g)
                 bearing = math.radians(self._approach_bearing(approach))
-                sx = cx + math.sin(bearing) * road * 0.58
-                sy = cy - math.cos(bearing) * road * 0.58
+                nx, ny = math.sin(bearing), -math.cos(bearing)
+                tx, ty = math.cos(bearing), math.sin(bearing)
+                lane_offset = self._lane_offset(approach, lane, road)
+                # Place each head beside its own lane, just upstream of the
+                # stop line; use the same centreline geometry as vehicle paths.
+                sx = cx + nx * road * 0.43 + tx * lane_offset + nx * 12
+                sy = cy + ny * road * 0.43 + ty * lane_offset + ny * 12
                 self._draw_signal_head(p, sx, sy, state, horizontal=abs(math.sin(bearing)) > 0.7)
         # Draw road signs as recognizable, full-size vector pictograms (not code-only icons).
         for sign in self.road_signs:
@@ -747,9 +805,31 @@ class TrafficScene(QWidget):
                 x, y = left - 35, cy
             else:
                 x, y = right + 35, cy
+            # Pedestrian signal: dark housing plus a distinct person glyph.
+            # Avoid the ambiguous persistent red square from the previous painter.
+            p.save()
             p.setPen(QPen(QColor("#111827"), 1))
-            p.setBrush(self.COLORS.get(state, self.COLORS["red"]))
-            p.drawRoundedRect(int(x - 5), int(y - 5), 10, 10, 2, 2)
+            p.setBrush(QColor("#111827"))
+            p.drawRoundedRect(int(x - 8), int(y - 12), 16, 24, 3, 3)
+            is_green = state in ("green", "flash")
+            lamp = QColor("#22c55e") if is_green else QColor("#ef4444")
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(lamp)
+            p.drawEllipse(int(x - 5), int(y - 9), 10, 10)
+            p.setPen(QPen(QColor("#f8fafc"), 2))
+            p.drawEllipse(int(x - 1), int(y - 7), 2, 2)
+            p.drawLine(int(x), int(y - 4), int(x), int(y + 1))
+            if is_green:
+                p.drawLine(int(x), int(y - 2), int(x - 3), int(y + 1))
+                p.drawLine(int(x), int(y - 2), int(x + 3), int(y))
+                p.drawLine(int(x), int(y + 1), int(x - 3), int(y + 5))
+                p.drawLine(int(x), int(y + 1), int(x + 3), int(y + 5))
+            else:
+                p.drawLine(int(x), int(y - 2), int(x - 3), int(y + 1))
+                p.drawLine(int(x), int(y - 2), int(x + 3), int(y + 1))
+                p.drawLine(int(x), int(y + 1), int(x - 3), int(y + 5))
+                p.drawLine(int(x), int(y + 1), int(x + 3), int(y + 5))
+            p.restore()
         p.setPen(QColor("#172033"))
         p.setFont(QFont("Segoe UI", 8))
         footer = ("Воспроизведение событий расчёта" if self.replay_mode else "Демонстрационная анимация") + " · схема условная, не натурная геометрия"
