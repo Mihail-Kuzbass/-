@@ -40,7 +40,7 @@ class TrafficScene(QWidget):
         self.movements = []
         self.pedestrians = []
         self.road_signs = []
-        self.lane_counts = {name: 2 for name in self.APPROACHES}
+        self.lane_counts = {name: 2 for name in ("Север", "Восток", "Юг", "Запад")}
         self.lane_turns = {}
         self.vehicles = []
         self.walkers = []
