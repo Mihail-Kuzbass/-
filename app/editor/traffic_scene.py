@@ -8,7 +8,7 @@ from math import hypot
 from PySide6.QtCore import Qt, QTimer, QPointF
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPainterPath
 from PySide6.QtWidgets import QWidget, QMenu
-from app.simulation.detailed import resolve_phase_movements
+from app.simulation.detailed import resolve_phase_movements, MovementDemand, vehicle_movements_conflict
 from app.signs import SIGN_CATALOG, movement_allowed_by_signs
 
 
@@ -135,7 +135,27 @@ class TrafficScene(QWidget):
             target_speed = 46.0
             remaining = vehicle["stop_distance"] - vehicle["distance"]
             released = vehicle.get("released", False)
-            if not released and remaining <= max(5.0, vehicle["speed"] * 0.9):
+            # A permissive left turn may receive a release event while the crossing
+            # conflict area is still occupied. Hold it at the stop line, then continue
+            # automatically once the conflicting vehicle clears; never brake mid-turn.
+            blocked_by_conflict = False
+            if released and vehicle["distance"] <= vehicle["stop_distance"] + 1.0:
+                try:
+                    approach, lane, turn = vehicle["key"].split(":", 2)
+                    current = MovementDemand(approach, int(lane), turn, 0)
+                    for other in self.vehicles:
+                        if other is vehicle or other["distance"] < other["stop_distance"] + 1.0:
+                            continue
+                        if other["distance"] >= other["length"] - 2.0:
+                            continue
+                        other_approach, other_lane, other_turn = other["key"].split(":", 2)
+                        opposing = MovementDemand(other_approach, int(other_lane), other_turn, 0)
+                        if vehicle_movements_conflict(current, opposing):
+                            blocked_by_conflict = True
+                            break
+                except (ValueError, TypeError):
+                    blocked_by_conflict = False
+            if blocked_by_conflict or (not released and remaining <= max(5.0, vehicle["speed"] * 0.9)):
                 target_speed = 0.0
             acceleration = 34.0 if target_speed > vehicle["speed"] else 70.0
             delta = max(-acceleration * dt, min(acceleration * dt, target_speed - vehicle["speed"]))
