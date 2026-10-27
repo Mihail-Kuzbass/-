@@ -134,6 +134,7 @@ def infer_intersection_approaches(geojson: dict[str, Any], latitude: float, long
 
     directions = {"Север": [], "Восток": [], "Юг": [], "Запад": []}
     matched = []
+    arm_bearings = []
     for feature in (geojson or {}).get("features", []):
         geometry = feature.get("geometry") or {}
         kind, coords = geometry.get("type"), geometry.get("coordinates") or []
@@ -154,6 +155,7 @@ def infer_intersection_approaches(geojson: dict[str, Any], latitude: float, long
                     if math.hypot(dx, dy) < 1e-9:
                         continue
                     angle = math.degrees(math.atan2(dx, dy)) % 360.0
+                    arm_bearings.append(angle)
                     if angle >= 315 or angle < 45:
                         side = "Север"
                     elif angle < 135:
@@ -206,11 +208,20 @@ def infer_intersection_approaches(geojson: dict[str, Any], latitude: float, long
             "Не удалось надёжно определить минимум два подхода рядом с выбранной точкой. "
             "Увеличьте масштаб, выберите общий узел дорог или загрузите более подробные данные OSM."
         )
+    # Estimate the number of distinct arms by clustering nearby bearings.
+    clustered_bearings = []
+    for bearing in sorted(arm_bearings):
+        if not any(min(abs(bearing - existing), 360 - abs(bearing - existing)) <= 25
+                   for existing in clustered_bearings):
+            clustered_bearings.append(bearing)
+    if len(clustered_bearings) > 1 and clustered_bearings[0] + 360 - clustered_bearings[-1] <= 25:
+        clustered_bearings.pop()
     return {
         "latitude": latitude,
         "longitude": longitude,
         "approaches": approaches,
         "detected_approach_count": len(approaches),
+        "detected_arm_count": len(clustered_bearings),
         "warnings": [
             "Число полос — оценка по тегам OSM; при отсутствии тегов принято 1.",
             "Данные OSM не задают реальные разрешённые повороты, стоп-линии, фазы или интенсивность.",
