@@ -153,6 +153,15 @@ class MainWindow(QMainWindow):
             return
 
         detected = inferred["approaches"]
+        detected_count = inferred["detected_approach_count"]
+        if detected_count == 3:
+            self.template_combo.setCurrentText("Т-образный")
+        elif detected_count == 5:
+            self.template_combo.setCurrentText("5-конечный")
+        elif detected_count >= 6:
+            self.template_combo.setCurrentText("6-конечный")
+        else:
+            self.template_combo.setCurrentText("Классический 4-конечный")
         # The current schematic editor is four-sided. Missing approaches are kept
         # at one lane, and the generated metadata clearly marks them for manual review.
         for approach, spin in self.lane_spins.items():
@@ -314,7 +323,7 @@ class MainWindow(QMainWindow):
 
     def _build_scheme_tab(self):
         w = QWidget(); layout = QVBoxLayout(w)
-        intro = QLabel("Редактор условной схемы перекрёстка. Число полос задаётся отдельно для каждого подхода. Геометрия пока схематическая: импортированные линии OSM/2ГИС автоматически в полосы не преобразуются.")
+        intro = QLabel("Выберите геометрический шаблон вручную или создайте черновик по выбранному узлу OSM на вкладке карты. Геометрия шаблона условная; число полос, направления и разрешённые повороты необходимо проверить.")
         intro.setWordWrap(True); layout.addWidget(intro)
         controls = QGroupBox("Полосы по направлениям"); form = QFormLayout(controls)
         self.lane_spins = {}
@@ -341,6 +350,11 @@ class MainWindow(QMainWindow):
         load = QPushButton("Загрузить схему…"); load.clicked.connect(self._load_intersection); buttons.addWidget(load)
         layout.addLayout(buttons)
         return w
+
+    def _intersection_template_changed(self, template):
+        if hasattr(self, "scheme"):
+            self.scheme.set_template(template)
+        self.statusBar().showMessage(f"Выбран шаблон: {template}. Проверьте направления движения.", 6000)
 
     def _lane_count_changed(self, approach, count):
         for key in list(self.lane_turns):
