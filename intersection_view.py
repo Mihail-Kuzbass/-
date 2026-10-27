@@ -1,7 +1,7 @@
 """Editable intersection schematic with dynamic three-to-six-arm templates."""
 import math
-from PySide6.QtCore import Qt, QPointF, QPen
-from PySide6.QtGui import QPainter, QColor, QFont, QPainterPath
+from PySide6.QtCore import Qt, QPointF
+from PySide6.QtGui import QPainter, QColor, QFont, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
 
