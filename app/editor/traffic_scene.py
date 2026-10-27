@@ -607,7 +607,7 @@ class TrafficScene(QWidget):
             outer = road * 0.66
             p.save()
             p.translate(cx, cy)
-            p.rotate(-math.degrees(bearing))
+            p.rotate(math.degrees(bearing))
             # In local coordinates the incoming arm points upward.
             for i in range(8):
                 stripe_x = -road * 0.36 + i * road * 0.09
