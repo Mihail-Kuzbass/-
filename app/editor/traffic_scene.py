@@ -78,6 +78,7 @@ class TrafficScene(QWidget):
         self.ped_spawn_clock.clear()
         self.playback_events = sorted((getattr(result, "events", None) or []), key=lambda e: (e["time"], 0 if e["kind"].endswith("arrival") else 1))
         self.event_cursor = 0
+        self.pending_vehicle_services = []
         self.replay_mode = result is not None
         self.update()
 
@@ -102,6 +103,7 @@ class TrafficScene(QWidget):
         self.spawn_clock.clear()
         self.ped_spawn_clock.clear()
         self.event_cursor = 0
+        self.pending_vehicle_services = []
         self.update()
 
     def _advance(self):
@@ -120,6 +122,7 @@ class TrafficScene(QWidget):
             stage, active = self._stage(), self._active_ids()
             self._spawn_eligible(stage, active, dt)
         stage, active = self._stage(), self._active_ids()
+        self._release_pending_vehicle_services(stage, active)
         # Re-pack waiting cars as the queue discharges; a follower advances
         # toward the stop line when the car ahead enters the junction.
         by_movement = {}
@@ -196,12 +199,11 @@ class TrafficScene(QWidget):
                                           "speed": 46.0, "turn": demand.turn, "vehicle_type": vehicle_type,
                                           "released": False})
             elif event["kind"] == "vehicle_served":
-                vehicle = next((v for v in self.vehicles if v["key"] == key and not v.get("released", False)
-                                and v["distance"] >= v["stop_distance"] - 1.0), None)
-                if vehicle is None:
-                    vehicle = next((v for v in self.vehicles if v["key"] == key and not v.get("released", False)), None)
-                if vehicle is not None:
-                    vehicle["released"] = True
+                # The aggregate model can serve a vehicle before the animation
+                # reaches its stop line. Queue the event; release only on green.
+                pending = getattr(self, "pending_vehicle_services", [])
+                pending.append(key)
+                self.pending_vehicle_services = pending
             elif event["kind"] == "pedestrian_arrival":
                 demand = next((p for p in self.pedestrians if p.movement_id == key), None)
                 if demand is not None:
@@ -214,6 +216,25 @@ class TrafficScene(QWidget):
                 if walker is not None:
                     walker["released"] = True
             self.event_cursor += 1
+
+    def _release_pending_vehicle_services(self, stage, active):
+        """Release replay vehicles only when their movement has a permissive signal."""
+        if stage not in ("green", "flash"):
+            return
+        pending = getattr(self, "pending_vehicle_services", [])
+        remaining = []
+        for key in pending:
+            if key not in active:
+                remaining.append(key)
+                continue
+            vehicle = next((v for v in self.vehicles
+                            if v["key"] == key and not v.get("released", False)
+                            and v["distance"] >= v["stop_distance"] - 1.0), None)
+            if vehicle is None:
+                remaining.append(key)
+            else:
+                vehicle["released"] = True
+        self.pending_vehicle_services = remaining
 
     @staticmethod
     def _vehicle_type_for_index(index):
