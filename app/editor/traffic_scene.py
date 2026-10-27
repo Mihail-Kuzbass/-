@@ -79,6 +79,7 @@ class TrafficScene(QWidget):
         self.playback_events = sorted((getattr(result, "events", None) or []), key=lambda e: (e["time"], 0 if e["kind"].endswith("arrival") else 1))
         self.event_cursor = 0
         self.pending_vehicle_services = []
+        self.pending_pedestrian_services = []
         self.replay_mode = result is not None
         self.update()
 
@@ -104,6 +105,7 @@ class TrafficScene(QWidget):
         self.ped_spawn_clock.clear()
         self.event_cursor = 0
         self.pending_vehicle_services = []
+        self.pending_pedestrian_services = []
         self.update()
 
     def _advance(self):
@@ -123,6 +125,7 @@ class TrafficScene(QWidget):
             self._spawn_eligible(stage, active, dt)
         stage, active = self._stage(), self._active_ids()
         self._release_pending_vehicle_services(stage, active)
+        self._release_pending_pedestrian_services(stage, active)
         # Re-pack waiting cars as the queue discharges; a follower advances
         # toward the stop line when the car ahead enters the junction.
         by_movement = {}
@@ -215,9 +218,9 @@ class TrafficScene(QWidget):
                                          "length": path.length(), "speed": 48.0,
                                          "style": self.event_cursor % 3, "released": False})
             elif event["kind"] == "pedestrian_served":
-                walker = next((v for v in self.walkers if v["key"] == key and not v.get("released", False)), None)
-                if walker is not None:
-                    walker["released"] = True
+                pending = getattr(self, "pending_pedestrian_services", [])
+                pending.append(key)
+                self.pending_pedestrian_services = pending
             self.event_cursor += 1
 
     def _release_pending_vehicle_services(self, stage, active):
@@ -238,6 +241,24 @@ class TrafficScene(QWidget):
             else:
                 vehicle["released"] = True
         self.pending_vehicle_services = remaining
+
+    def _release_pending_pedestrian_services(self, stage, active):
+        """Release waiting pedestrians only when their crossing signal is permissive."""
+        if stage not in ("green", "flash"):
+            return
+        pending = getattr(self, "pending_pedestrian_services", [])
+        remaining = []
+        for key in pending:
+            if key not in active:
+                remaining.append(key)
+                continue
+            walker = next((v for v in self.walkers
+                           if v["key"] == key and not v.get("released", False)), None)
+            if walker is None:
+                remaining.append(key)
+            else:
+                walker["released"] = True
+        self.pending_pedestrian_services = remaining
 
     @staticmethod
     def _vehicle_type_for_index(index):
