@@ -464,13 +464,13 @@ class TrafficScene(QWidget):
                       g["cy"] + ey * exit_radius + ety * exit_offset)
         path = QPainterPath(start)
         path.lineTo(stop)
-        # A pair of cubic curves gives a continuous tangent through the junction.
-        entry = QPointF(g["cx"] + nx * road_radius + tx * lane_offset,
-                        g["cy"] + ny * road_radius + ty * lane_offset)
-        c1 = QPointF(entry.x() - nx * g["road"] * 0.08,
-                     entry.y() - ny * g["road"] * 0.08)
-        c2 = QPointF(g["cx"] + ex * g["road"] * 0.16 + etx * exit_offset,
-                     g["cy"] + ey * g["road"] * 0.16 + ety * exit_offset)
+        # Build one continuous cubic from the stop line to the selected exit.
+        # The first control point must lie INSIDE the junction; placing it behind
+        # the stop line makes the vehicle initially reverse or kink before turning.
+        c1 = QPointF(stop.x() - nx * g["road"] * 0.18 - tx * lane_offset * 0.15,
+                     stop.y() - ny * g["road"] * 0.18 - ty * lane_offset * 0.15)
+        c2 = QPointF(g["cx"] + ex * g["road"] * 0.18 + etx * exit_offset,
+                     g["cy"] + ey * g["road"] * 0.18 + ety * exit_offset)
         path.cubicTo(c1, c2, end)
         return path, stop_distance
 
